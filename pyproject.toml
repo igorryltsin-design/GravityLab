@@ -1,0 +1,30 @@
+[build-system]
+requires = ["setuptools>=68", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "gravitylab"
+version = "0.1.0"
+description = "Portfolio-focused PyQt6 gravity simulation sandbox."
+readme = "README.md"
+requires-python = ">=3.11"
+dependencies = [
+    "PyQt6>=6.10",
+]
+
+[project.optional-dependencies]
+dev = [
+    "pytest>=8.0",
+    "pytest-qt>=4.4",
+]
+
+[project.scripts]
+gravitylab = "gravitylab.app:run"
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.pytest.ini_options]
+pythonpath = ["src"]
+testpaths = ["tests"]
+qt_api = "pyqt6"
