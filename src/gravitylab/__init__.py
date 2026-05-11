@@ -1,4 +1,4 @@
-"""GravityLab package."""
+"""Пакет GravityLab: экспорт основной функции запуска приложения."""
 
 from .app import run
 

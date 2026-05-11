@@ -12,8 +12,8 @@ from .theme import apply_theme
 
 
 def configure_qt_environment() -> None:
-    # In a frozen PyInstaller bundle, the runtime hook already sets Qt paths.
-    # Overriding them here can break macOS plugin discovery.
+    # В собранном (PyInstaller) приложении пути к Qt уже настроены рантаймом.
+    # Повторная установка переменной окружения может сломать поиск плагинов на macOS.
     if getattr(sys, "frozen", False):
         return
     plugin_dir = Path(PyQt6.__file__).resolve().parent / "Qt6" / "plugins" / "platforms"
@@ -24,15 +24,18 @@ def configure_qt_environment() -> None:
 def create_application(argv: list[str] | None = None) -> QApplication:
     configure_qt_environment()
     app = QApplication(argv or sys.argv)
+    # Эти поля использует QSettings и ОС для идентификации приложения.
     app.setOrganizationName("GravityLab")
     app.setApplicationName("GravityLab")
     app.setApplicationDisplayName("GravityLab")
+    # Применяем глобальную тему до создания главного окна.
     apply_theme(app)
     return app
 
 
 def run(argv: list[str] | None = None) -> int:
     app = create_application(argv)
+    # Главное окно связывает симуляцию и все UI-компоненты.
     window = MainWindow()
     window.show()
     return app.exec()

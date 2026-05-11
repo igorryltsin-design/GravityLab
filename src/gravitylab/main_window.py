@@ -25,6 +25,8 @@ from .ui import BottomStrip, ControlPanel, HelpDialog, InspectorPanel, Simulatio
 
 
 class MainWindow(QMainWindow):
+    """Главный координатор: соединяет модель симуляции, UI и цикл обновления."""
+
     COMPACT_WIDTH = 1180
     NARROW_WIDTH = 980
     VERY_NARROW_WIDTH = 860
@@ -39,14 +41,20 @@ class MainWindow(QMainWindow):
         self.resize(WINDOW_WIDTH, WINDOW_HEIGHT)
         self.setAttribute(Qt.WidgetAttribute.WA_DeleteOnClose, True)
 
+        # Единая точка хранения пользовательских настроек окна и режимов.
         self.settings = QSettings()
+        # Доменная модель (физика + состояние сцены).
         self.sim = GravitySim()
+
+        # Основные визуальные блоки интерфейса.
         self.canvas = SimulationCanvas()
         self.control_panel = ControlPanel()
         self.inspector_panel = InspectorPanel()
         self.info_panel = self.inspector_panel
         self.top_bar = TopBar()
         self.bottom_strip = BottomStrip()
+
+        # Параметры цикла отрисовки/обновления.
         self._last_tick = time.perf_counter()
         self._last_panel_refresh = 0.0
         self.timer = QTimer(self)
@@ -252,15 +260,18 @@ class MainWindow(QMainWindow):
     def _on_tick(self) -> None:
         if not self.isVisible():
             return
+        # Дельта времени между кадрами нужна для расчёта FPS.
         now = time.perf_counter()
         delta = max(1e-6, now - self._last_tick)
         self._last_tick = now
         self.sim.set_fps(1.0 / delta)
+        # Физику двигаем только когда не стоит пауза.
         if not self.sim.paused:
             self.sim.step()
         self._refresh_ui(force_panels=False)
 
     def _refresh_ui(self, force_panels: bool = True) -> None:
+        # Snapshot из модели отделяет слой UI от мутабельного состояния симуляции.
         snapshot = self.sim.snapshot(trail_points=self.SNAPSHOT_TRAIL_POINTS)
         stats = self.sim.stats()
 
@@ -282,11 +293,13 @@ class MainWindow(QMainWindow):
         self.top_bar.set_theme_mode(self.theme_mode == "night")
 
         now = time.perf_counter()
+        # Тяжёлые боковые панели обновляем реже, чтобы не перегружать UI.
         if force_panels or now - self._last_panel_refresh >= self.PANEL_REFRESH_INTERVAL:
             self._refresh_panels(snapshot, stats)
             self._last_panel_refresh = now
 
     def _refresh_panels(self, snapshot, stats) -> None:
+        # История расстояния/скорости нужна для sparkline-графиков в инспекторе.
         series = self.sim.selected_body_series()
         self.control_panel.update_state(snapshot, stats, self.sim.config, self.sim.render_options)
         self.inspector_panel.update_state(snapshot, stats, series)
@@ -304,6 +317,7 @@ class MainWindow(QMainWindow):
     def _apply_responsive_layout(self) -> None:
         width = self.width()
         height = self.height()
+        # Три порога ширины и один по высоте управляют плотностью интерфейса.
         compact = width < self.COMPACT_WIDTH or height < self.COMPACT_HEIGHT
         narrow = width < self.NARROW_WIDTH
         very_narrow = width < self.VERY_NARROW_WIDTH
@@ -325,11 +339,13 @@ class MainWindow(QMainWindow):
             return
 
         if very_narrow:
+            # На очень узком экране оставляем только сцену.
             self._auto_hidden_controls = True
             self._auto_hidden_inspector = True
             self.control_panel.hide()
             self.inspector_panel.hide()
         elif narrow:
+            # На узком экране скрываем инспектор, но оставляем левую панель.
             self._auto_hidden_controls = False
             self._auto_hidden_inspector = True
             self.control_panel.setVisible(self.toggle_controls_action.isChecked())
@@ -371,6 +387,7 @@ class MainWindow(QMainWindow):
         self._refresh_ui()
 
     def _apply_named_preset(self, preset_id: str) -> None:
+        # Чтобы не ломать учебный сценарий, сохраняем состояние паузы пользователя.
         was_paused = self.sim.paused
         self.sim.apply_named_preset(preset_id)
         self.sim.paused = was_paused
@@ -445,6 +462,7 @@ class MainWindow(QMainWindow):
         self._refresh_ui()
 
     def _disable_follow_for_manual_camera(self) -> None:
+        # Любое ручное движение камеры отключает follow-режим.
         if self.sim.render_options.cinematic_mode and self.sim.follow_target_index is not None:
             self.sim.set_follow_target(None)
             self.sim.set_camera_mode("manual")
@@ -523,6 +541,7 @@ class MainWindow(QMainWindow):
         self._entry_animation = group
 
     def _restore_settings(self) -> None:
+        # Геометрия и splitter восстанавливаются первыми, чтобы UI собрался в прежнем виде.
         geometry = self.settings.value("window/geometry")
         splitter_state = self.settings.value("window/splitter_state")
         if geometry is not None:
@@ -553,6 +572,7 @@ class MainWindow(QMainWindow):
         self._sync_panel_visibility()
 
     def _save_settings(self) -> None:
+        # При закрытии окна сохраняем все ключевые параметры учебной сцены.
         self.settings.setValue("window/geometry", self.saveGeometry())
         self.settings.setValue("window/splitter_state", self.splitter.saveState())
         self.settings.setValue("view/control_visible", self.toggle_controls_action.isChecked())

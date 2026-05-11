@@ -24,6 +24,8 @@ from ..theme import current_palette, qcolor
 
 
 class SimulationCanvas(QWidget):
+    """Канвас сцены: отрисовка системы, камера и взаимодействие мышью."""
+
     body_selected = pyqtSignal(int)
     zoom_changed = pyqtSignal(float)
     manual_camera_interacted = pyqtSignal()
@@ -33,10 +35,12 @@ class SimulationCanvas(QWidget):
         self.setMouseTracking(True)
         self.setMinimumWidth(620)
         self.snapshot_data: SimulationSnapshot | None = None
+        # offset_* задаёт сдвиг камеры в мировых координатах.
         self.offset_x = 0.0
         self.offset_y = 0.0
         self.target_offset_x = 0.0
         self.target_offset_y = 0.0
+        # zoom и target_zoom используются для плавного перехода в cinematic-режимах.
         self.zoom = 1.0
         self.target_zoom = 1.0
         self.drag_active = False
@@ -45,6 +49,7 @@ class SimulationCanvas(QWidget):
         self._camera_initialized = False
 
     def set_snapshot(self, snapshot: SimulationSnapshot) -> None:
+        # На каждом кадре получаем новый "снимок" сцены из модели.
         self.snapshot_data = snapshot
         self._update_camera_targets(snapshot)
         self._advance_camera(snapshot)
@@ -82,11 +87,13 @@ class SimulationCanvas(QWidget):
         return pixmap.save(path, "PNG")
 
     def world_to_screen(self, x: float, y: float) -> QPointF:
+        # Перевод из физических координат в пиксели окна.
         center_x = self.width() * 0.5
         center_y = self.height() * 0.5
         return QPointF(center_x + (x + self.offset_x) * self.zoom, center_y + (y + self.offset_y) * self.zoom)
 
     def screen_to_world(self, point: QPointF) -> tuple[float, float]:
+        # Обратное преобразование: из пикселей обратно в координаты модели.
         center_x = self.width() * 0.5
         center_y = self.height() * 0.5
         world_x = (point.x() - center_x) / self.zoom - self.offset_x
@@ -108,6 +115,7 @@ class SimulationCanvas(QWidget):
         self.update()
 
     def paintEvent(self, _event: QPaintEvent) -> None:
+        # Порядок рендера важен: фон -> сетка -> следы -> тела -> оверлеи.
         painter = QPainter(self)
         painter.setRenderHint(QPainter.RenderHint.Antialiasing, True)
         self._paint_background(painter)
@@ -127,6 +135,7 @@ class SimulationCanvas(QWidget):
     def wheelEvent(self, event: QWheelEvent) -> None:
         delta = event.angleDelta().y()
         factor = 1.12 if delta > 0 else 0.9
+        # Масштабируем относительно курсора, а не центра экрана.
         mouse_world_before = self.screen_to_world(event.position())
         self.set_zoom(self.zoom * factor)
         mouse_world_after = self.screen_to_world(event.position())
@@ -141,13 +150,16 @@ class SimulationCanvas(QWidget):
         if event.button() == Qt.MouseButton.LeftButton:
             body = self._body_at_point(event.position())
             if body:
+                # Клик по телу меняет выделение в главном окне.
                 self.body_selected.emit(body.index)
                 return
+            # Клик по пустому месту запускает ручной "drag camera".
             self.drag_active = True
             self.last_drag_pos = event.pos()
 
     def mouseMoveEvent(self, event: QMouseEvent) -> None:
         if self.drag_active:
+            # При перетаскивании двигаем камеру в мировых координатах.
             delta = event.pos() - self.last_drag_pos
             self.offset_x += delta.x() / self.zoom
             self.offset_y += delta.y() / self.zoom
@@ -160,6 +172,7 @@ class SimulationCanvas(QWidget):
 
         body = self._body_at_point(event.position())
         if body:
+            # Всплывающая подсказка для быстрого чтения параметров тела.
             distance = math.hypot(body.x, body.y)
             QToolTip.showText(
                 event.globalPosition().toPoint(),
@@ -187,6 +200,7 @@ class SimulationCanvas(QWidget):
 
     def _update_camera_targets(self, snapshot: SimulationSnapshot) -> None:
         if not self._camera_initialized:
+            # При первом кадре синхронизируемся с zoom из модели.
             self.target_zoom = snapshot.render_options.zoom
             self.zoom = snapshot.render_options.zoom
             self._camera_initialized = True
@@ -204,6 +218,7 @@ class SimulationCanvas(QWidget):
             self._set_fit_targets(snapshot)
 
     def _set_fit_targets(self, snapshot: SimulationSnapshot) -> None:
+        # Рассчитываем прямоугольник, который покрывает все тела.
         xs = [body.x for body in snapshot.bodies]
         ys = [body.y for body in snapshot.bodies]
         if not xs or not ys:
@@ -222,10 +237,12 @@ class SimulationCanvas(QWidget):
         margin = 180.0
         avail_w = max(80.0, self.width() - margin)
         avail_h = max(80.0, self.height() - margin)
+        # Ограничиваем zoom, чтобы не получить слишком "далеко" или слишком "близко".
         self.target_zoom = max(0.35, min(2.6, min(avail_w / width, avail_h / height)))
 
     def _advance_camera(self, snapshot: SimulationSnapshot) -> None:
         if snapshot.render_options.cinematic_mode or snapshot.camera_mode != "manual":
+            # Плавное приближение к target-координатам камеры (easing).
             blend = 0.16
             self.offset_x += (self.target_offset_x - self.offset_x) * blend
             self.offset_y += (self.target_offset_y - self.offset_y) * blend
@@ -328,6 +345,7 @@ class SimulationCanvas(QWidget):
                 continue
             render_points = body.trail
             if len(render_points) > 280:
+                # Для длинных хвостов делаем прореживание, чтобы не перегружать кадр.
                 stride = 2 if body.index == self.snapshot_data.selected_index else 3
                 render_points = render_points[::stride]
             points = [self.world_to_screen(x, y) for x, y in render_points]
@@ -352,6 +370,7 @@ class SimulationCanvas(QWidget):
             return
         occupied_label_rects: list[QRectF] = []
         bodies = list(self.snapshot_data.bodies)
+        # Сначала подписываем важные тела, чтобы им проще было найти место без пересечений.
         label_bodies = sorted(
             [body for body in bodies[1:] if not body.is_asteroid],
             key=lambda body: (
@@ -557,6 +576,7 @@ class SimulationCanvas(QWidget):
 
         for rect in candidates:
             fitted = self._clamp_rect(rect)
+            # Берём первое положение подписи, которое не пересекается с уже занятыми.
             if not any(fitted.intersects(existing) for existing in occupied_rects):
                 return fitted
 

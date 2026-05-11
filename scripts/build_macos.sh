@@ -25,9 +25,9 @@ python3 -m PyInstaller \
   --paths "$ROOT_DIR/src" \
   "$ROOT_DIR/gravity_sim_study_pyqt.py"
 
-# Conda-based PyQt6 can expose a global Qt5 plugins directory; PyInstaller may
-# collect those incompatible plugins into the bundle. Replace them with the
-# actual Qt6 plugins shipped with the installed PyQt6 package.
+# В окружениях Conda рядом с PyQt6 может быть глобальная папка Qt5 plugins.
+# PyInstaller иногда случайно подхватывает эти несовместимые плагины в бандл.
+# Поэтому явно заменяем плагины в .app на те, что реально поставляются с Qt6.
 rm -rf "$APP_PLUGIN_DIR"
 cp -R "$PYQT_PLUGIN_DIR" "$APP_PLUGIN_DIR"
 codesign --force --deep --sign - "$APP_BUNDLE"

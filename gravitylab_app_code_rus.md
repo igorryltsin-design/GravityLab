@@ -1,0 +1,4199 @@
+# GravityLab: код приложения в одном файле
+
+Дата сборки: 2026-03-13 19:17:10 MSK
+
+Формат каждой секции:
+- Название файла
+- Назначение файла
+- Полный код файла (с русскими комментариями в исходниках)
+
+---
+
+## Файл: `gravity_sim_study_pyqt.py`
+
+**Назначение:** Совместимый скрипт запуска: добавляет src в путь импорта и запускает приложение.
+
+```python
+from pathlib import Path
+import sys
+
+ROOT = Path(__file__).resolve().parent
+SRC = ROOT / "src"
+if str(SRC) not in sys.path:
+    sys.path.insert(0, str(SRC))
+
+from gravitylab.app import run
+
+
+if __name__ == "__main__":
+    raise SystemExit(run())
+
+```
+
+---
+
+## Файл: `src/gravitylab/__init__.py`
+
+**Назначение:** Пакетный экспорт основной функции запуска run().
+
+```python
+"""Пакет GravityLab: экспорт основной функции запуска приложения."""
+
+from .app import run
+
+__all__ = ["run"]
+
+```
+
+---
+
+## Файл: `src/gravitylab/__main__.py`
+
+**Назначение:** Точка входа для запуска командой python -m gravitylab.
+
+```python
+from .app import run
+
+
+if __name__ == "__main__":
+    raise SystemExit(run())
+
+```
+
+---
+
+## Файл: `src/gravitylab/app.py`
+
+**Назначение:** Инициализация QApplication, настройка Qt-плагинов, применение темы и запуск главного окна.
+
+```python
+from __future__ import annotations
+
+import os
+import sys
+from pathlib import Path
+
+import PyQt6
+from PyQt6.QtWidgets import QApplication
+
+from .main_window import MainWindow
+from .theme import apply_theme
+
+
+def configure_qt_environment() -> None:
+    # В собранном (PyInstaller) приложении пути к Qt уже настроены рантаймом.
+    # Повторная установка переменной окружения может сломать поиск плагинов на macOS.
+    if getattr(sys, "frozen", False):
+        return
+    plugin_dir = Path(PyQt6.__file__).resolve().parent / "Qt6" / "plugins" / "platforms"
+    if plugin_dir.exists():
+        os.environ.setdefault("QT_QPA_PLATFORM_PLUGIN_PATH", str(plugin_dir))
+
+
+def create_application(argv: list[str] | None = None) -> QApplication:
+    configure_qt_environment()
+    app = QApplication(argv or sys.argv)
+    # Эти поля использует QSettings и ОС для идентификации приложения.
+    app.setOrganizationName("GravityLab")
+    app.setApplicationName("GravityLab")
+    app.setApplicationDisplayName("GravityLab")
+    # Применяем глобальную тему до создания главного окна.
+    apply_theme(app)
+    return app
+
+
+def run(argv: list[str] | None = None) -> int:
+    app = create_application(argv)
+    # Главное окно связывает симуляцию и все UI-компоненты.
+    window = MainWindow()
+    window.show()
+    return app.exec()
+
+```
+
+---
+
+## Файл: `src/gravitylab/main_window.py`
+
+**Назначение:** Главный координатор: связывает UI, симуляцию, таймер обновления, меню, hotkeys и сохранение настроек.
+
+```python
+from __future__ import annotations
+
+from pathlib import Path
+import time
+
+from PyQt6.QtCore import QParallelAnimationGroup, QPropertyAnimation, QSettings, QTimer, Qt
+from PyQt6.QtGui import QAction, QCloseEvent, QKeySequence, QShortcut
+from PyQt6.QtWidgets import (
+    QApplication,
+    QFileDialog,
+    QGraphicsOpacityEffect,
+    QHBoxLayout,
+    QLabel,
+    QMainWindow,
+    QMessageBox,
+    QSizePolicy,
+    QSplitter,
+    QVBoxLayout,
+    QWidget,
+)
+
+from .sim.model import GravitySim
+from .theme import LEFT_PANEL_WIDTH, RIGHT_PANEL_WIDTH, WINDOW_HEIGHT, WINDOW_WIDTH, ThemeMode, apply_theme, current_theme_mode
+from .ui import BottomStrip, ControlPanel, HelpDialog, InspectorPanel, SimulationCanvas, TopBar
+
+
+class MainWindow(QMainWindow):
+    """Главный координатор: соединяет модель симуляции, UI и цикл обновления."""
+
+    COMPACT_WIDTH = 1180
+    NARROW_WIDTH = 980
+    VERY_NARROW_WIDTH = 860
+    COMPACT_HEIGHT = 980
+    SHORT_HEIGHT = 820
+    PANEL_REFRESH_INTERVAL = 0.12
+    SNAPSHOT_TRAIL_POINTS = 420
+
+    def __init__(self) -> None:
+        super().__init__()
+        self.setWindowTitle("GravityLab")
+        self.resize(WINDOW_WIDTH, WINDOW_HEIGHT)
+        self.setAttribute(Qt.WidgetAttribute.WA_DeleteOnClose, True)
+
+        # Единая точка хранения пользовательских настроек окна и режимов.
+        self.settings = QSettings()
+        # Доменная модель (физика + состояние сцены).
+        self.sim = GravitySim()
+
+        # Основные визуальные блоки интерфейса.
+        self.canvas = SimulationCanvas()
+        self.control_panel = ControlPanel()
+        self.inspector_panel = InspectorPanel()
+        self.info_panel = self.inspector_panel
+        self.top_bar = TopBar()
+        self.bottom_strip = BottomStrip()
+
+        # Параметры цикла отрисовки/обновления.
+        self._last_tick = time.perf_counter()
+        self._last_panel_refresh = 0.0
+        self.timer = QTimer(self)
+        self._auto_hidden_controls = False
+        self._auto_hidden_inspector = False
+        self.theme_mode: ThemeMode = "day"
+        self.help_dialog: HelpDialog | None = None
+
+        self._build_layout()
+        self._create_actions()
+        self._connect_signals()
+        self._setup_shortcuts()
+        self._restore_settings()
+        self._bootstrap_presets()
+        self._animate_entry()
+        self._start_timer()
+        self._refresh_ui()
+
+    def closeEvent(self, event: QCloseEvent) -> None:
+        self.timer.stop()
+        if hasattr(self, "_entry_animation"):
+            self._entry_animation.stop()
+        self._save_settings()
+        super().closeEvent(event)
+
+    def _build_layout(self) -> None:
+        self.control_panel.setMinimumWidth(220)
+        self.control_panel.setMaximumWidth(280)
+        self.control_panel.setSizePolicy(QSizePolicy.Policy.Preferred, QSizePolicy.Policy.Expanding)
+
+        self.inspector_panel.setMinimumWidth(228)
+        self.inspector_panel.setMaximumWidth(278)
+        self.inspector_panel.setSizePolicy(QSizePolicy.Policy.Preferred, QSizePolicy.Policy.Expanding)
+
+        stage = QWidget()
+        self.stage_layout = QVBoxLayout(stage)
+        self.stage_layout.setContentsMargins(0, 0, 0, 0)
+        self.stage_layout.setSpacing(10)
+        self.stage_layout.addWidget(self.top_bar)
+        self.stage_layout.addWidget(self.canvas, 1)
+        self.stage_layout.addWidget(self.bottom_strip)
+
+        self.splitter = QSplitter(Qt.Orientation.Horizontal)
+        self.splitter.setChildrenCollapsible(False)
+        self.splitter.addWidget(self.control_panel)
+        self.splitter.addWidget(stage)
+        self.splitter.addWidget(self.inspector_panel)
+        self.splitter.setStretchFactor(0, 0)
+        self.splitter.setStretchFactor(1, 1)
+        self.splitter.setStretchFactor(2, 0)
+        self.splitter.setSizes([LEFT_PANEL_WIDTH, 980, RIGHT_PANEL_WIDTH])
+
+        shell = QWidget()
+        self.shell_layout = QHBoxLayout(shell)
+        self.shell_layout.setContentsMargins(16, 12, 12, 12)
+        self.shell_layout.addWidget(self.splitter)
+        self.setCentralWidget(shell)
+
+        self.status_title = QLabel()
+        self.statusBar().addPermanentWidget(self.status_title)
+        self.statusBar().setSizeGripEnabled(False)
+
+    def resizeEvent(self, event) -> None:
+        super().resizeEvent(event)
+        self._apply_responsive_layout()
+
+    def _create_actions(self) -> None:
+        self.file_menu = self.menuBar().addMenu("&Файл")
+        self.view_menu = self.menuBar().addMenu("&Вид")
+        self.sim_menu = self.menuBar().addMenu("&Симуляция")
+        self.help_menu = self.menuBar().addMenu("&Справка")
+
+        self.take_screenshot_action = QAction("Сделать снимок", self)
+        self.take_screenshot_action.setShortcut(QKeySequence("Ctrl+Shift+S"))
+        self.quit_action = QAction("Выход", self)
+        self.quit_action.setShortcut(QKeySequence.StandardKey.Quit)
+        self.file_menu.addAction(self.take_screenshot_action)
+        self.file_menu.addSeparator()
+        self.file_menu.addAction(self.quit_action)
+
+        self.toggle_controls_action = QAction("Показывать панель управления", self, checkable=True)
+        self.toggle_controls_action.setChecked(True)
+        self.toggle_info_action = QAction("Показывать инспектор", self, checkable=True)
+        self.toggle_info_action.setChecked(True)
+        self.clean_ui_action = QAction("Чистый UI", self, checkable=True)
+        self.cinematic_action = QAction("Кино-камера", self, checkable=True)
+        self.night_theme_action = QAction("Ночная тема", self, checkable=True)
+        self.fit_action = QAction("Подогнать сцену", self)
+        self.reset_view_action = QAction("Сбросить вид", self)
+        self.view_menu.addAction(self.toggle_controls_action)
+        self.view_menu.addAction(self.toggle_info_action)
+        self.view_menu.addAction(self.clean_ui_action)
+        self.view_menu.addAction(self.cinematic_action)
+        self.view_menu.addAction(self.night_theme_action)
+        self.view_menu.addSeparator()
+        self.view_menu.addAction(self.fit_action)
+        self.view_menu.addAction(self.reset_view_action)
+
+        self.play_pause_action = QAction("Старт / Пауза", self)
+        self.play_pause_action.setShortcut(QKeySequence(Qt.Key.Key_Space))
+        self.step_action = QAction("Один шаг", self)
+        self.step_action.setShortcut(QKeySequence("Ctrl+."))
+        self.reset_action = QAction("Сбросить систему", self)
+        self.reset_action.setShortcut(QKeySequence(Qt.Key.Key_R))
+        self.next_body_action = QAction("Следующее тело", self)
+        self.next_body_action.setShortcut(QKeySequence(Qt.Key.Key_Tab))
+        self.sim_menu.addAction(self.play_pause_action)
+        self.sim_menu.addAction(self.step_action)
+        self.sim_menu.addAction(self.reset_action)
+        self.sim_menu.addAction(self.next_body_action)
+
+        self.about_action = QAction("О GravityLab", self)
+        self.help_details_action = QAction("Подробная справка", self)
+        self.help_menu.addAction(self.about_action)
+        self.help_menu.addSeparator()
+        self.help_menu.addAction(self.help_details_action)
+
+    def _connect_signals(self) -> None:
+        self.top_bar.play_pause_requested.connect(self._toggle_play_pause)
+        self.top_bar.reset_requested.connect(lambda: self._reset_system(self.sim.num_planets))
+        self.top_bar.fit_requested.connect(self.canvas.fit_to_scene)
+        self.top_bar.screenshot_requested.connect(self._take_screenshot)
+        self.top_bar.help_requested.connect(self._show_help_dialog)
+        self.top_bar.theme_toggled.connect(self._set_night_theme_enabled)
+        self.top_bar.clean_ui_toggled.connect(self._set_clean_ui)
+        self.top_bar.cinematic_toggled.connect(self._set_cinematic_mode)
+        self.top_bar.next_body_requested.connect(self._select_next_planet)
+
+        self.bottom_strip.play_pause_requested.connect(self._toggle_play_pause)
+        self.bottom_strip.step_requested.connect(self._step_once)
+        self.bottom_strip.reset_requested.connect(lambda: self._reset_system(self.sim.num_planets))
+        self.bottom_strip.time_scale_changed.connect(self._set_time_scale)
+
+        self.control_panel.num_planets_changed.connect(self._reset_system)
+        self.control_panel.gravity_changed.connect(self._set_g)
+        self.control_panel.time_scale_changed.connect(self._set_time_scale)
+        self.control_panel.asteroid_density_changed.connect(self._set_asteroid_belt_density)
+        self.control_panel.mode_toggled.connect(self._set_mode)
+        self.control_panel.preset_requested.connect(self._apply_named_preset)
+        self.control_panel.fit_requested.connect(self.canvas.fit_to_scene)
+        self.control_panel.reset_view_requested.connect(self._reset_view_manual)
+        self.control_panel.screenshot_requested.connect(self._take_screenshot)
+
+        self.inspector_panel.center_selected_requested.connect(self._center_on_selected)
+        self.inspector_panel.follow_selected_toggled.connect(self._set_follow_selected)
+        self.inspector_panel.speed_scaled.connect(self._scale_speed)
+        self.inspector_panel.mass_scaled.connect(self._scale_mass)
+
+        self.canvas.body_selected.connect(self._handle_canvas_selection)
+        self.canvas.zoom_changed.connect(self._set_render_zoom)
+        self.canvas.manual_camera_interacted.connect(self._disable_follow_for_manual_camera)
+
+        self.take_screenshot_action.triggered.connect(self._take_screenshot)
+        self.quit_action.triggered.connect(self.close)
+        self.play_pause_action.triggered.connect(self._toggle_play_pause)
+        self.step_action.triggered.connect(self._step_once)
+        self.reset_action.triggered.connect(lambda: self._reset_system(self.sim.num_planets))
+        self.next_body_action.triggered.connect(self._select_next_planet)
+        self.fit_action.triggered.connect(self.canvas.fit_to_scene)
+        self.reset_view_action.triggered.connect(self._reset_view_manual)
+        self.toggle_controls_action.toggled.connect(self.control_panel.setVisible)
+        self.toggle_info_action.toggled.connect(self.inspector_panel.setVisible)
+        self.clean_ui_action.toggled.connect(self._set_clean_ui)
+        self.cinematic_action.toggled.connect(self._set_cinematic_mode)
+        self.night_theme_action.toggled.connect(self._set_night_theme_enabled)
+        self.about_action.triggered.connect(self._show_about)
+        self.help_details_action.triggered.connect(self._show_help_dialog)
+
+    def _setup_shortcuts(self) -> None:
+        for index in range(1, 10):
+            shortcut = QShortcut(QKeySequence(str(index)), self)
+            shortcut.activated.connect(lambda value=index: self._reset_system(value))
+
+        for key, callback in (
+            ("[", self._select_prev_planet),
+            ("]", self._select_next_planet),
+            ("-", lambda: self._scale_speed(0.9)),
+            ("=", lambda: self._scale_speed(1.1)),
+            ("PgUp", lambda: self._set_g(self.sim.g * 1.1)),
+            ("PgDown", lambda: self._set_g(self.sim.g / 1.1)),
+            ("O", lambda: self._toggle_mode_named("only_sun")),
+            ("T", lambda: self._toggle_mode_named("trails")),
+            ("G", lambda: self._toggle_mode_named("grid")),
+            ("C", lambda: self._toggle_mode_named("theory")),
+            ("L", lambda: self._toggle_mode_named("labels")),
+            ("F", lambda: self._set_follow_selected(True)),
+            ("U", lambda: self._set_clean_ui(not self.sim.render_options.clean_ui)),
+            ("Escape", self.close),
+        ):
+            shortcut = QShortcut(QKeySequence(key), self)
+            shortcut.activated.connect(callback)
+
+    def _bootstrap_presets(self) -> None:
+        presets = self.sim.preset_definitions()
+        self.control_panel.set_presets(presets, self.sim.active_preset)
+        self.top_bar.set_presets(presets)
+
+    def _start_timer(self) -> None:
+        self.timer.setInterval(16)
+        self.timer.timeout.connect(self._on_tick)
+        self.timer.start()
+
+    def _on_tick(self) -> None:
+        if not self.isVisible():
+            return
+        # Дельта времени между кадрами нужна для расчёта FPS.
+        now = time.perf_counter()
+        delta = max(1e-6, now - self._last_tick)
+        self._last_tick = now
+        self.sim.set_fps(1.0 / delta)
+        # Физику двигаем только когда не стоит пауза.
+        if not self.sim.paused:
+            self.sim.step()
+        self._refresh_ui(force_panels=False)
+
+    def _refresh_ui(self, force_panels: bool = True) -> None:
+        # Snapshot из модели отделяет слой UI от мутабельного состояния симуляции.
+        snapshot = self.sim.snapshot(trail_points=self.SNAPSHOT_TRAIL_POINTS)
+        stats = self.sim.stats()
+
+        self.canvas.set_snapshot(snapshot)
+        self.sim.set_render_zoom(self.canvas.zoom)
+        self.top_bar.update_state(snapshot, stats)
+        self.bottom_strip.update_state(snapshot, stats)
+        self.play_pause_action.setText("Старт" if snapshot.paused else "Пауза")
+        self.clean_ui_action.blockSignals(True)
+        self.clean_ui_action.setChecked(snapshot.render_options.clean_ui)
+        self.clean_ui_action.blockSignals(False)
+        self.cinematic_action.blockSignals(True)
+        self.cinematic_action.setChecked(snapshot.render_options.cinematic_mode)
+        self.cinematic_action.blockSignals(False)
+        self.status_title.setText(
+            f"{'Пауза' if snapshot.paused else 'Live'} | {snapshot.active_preset or 'Без пресета'} | "
+            f"тело {snapshot.bodies[snapshot.selected_index].name} | G {snapshot.g:.2f} | fps {stats.fps:.1f}"
+        )
+        self.top_bar.set_theme_mode(self.theme_mode == "night")
+
+        now = time.perf_counter()
+        # Тяжёлые боковые панели обновляем реже, чтобы не перегружать UI.
+        if force_panels or now - self._last_panel_refresh >= self.PANEL_REFRESH_INTERVAL:
+            self._refresh_panels(snapshot, stats)
+            self._last_panel_refresh = now
+
+    def _refresh_panels(self, snapshot, stats) -> None:
+        # История расстояния/скорости нужна для sparkline-графиков в инспекторе.
+        series = self.sim.selected_body_series()
+        self.control_panel.update_state(snapshot, stats, self.sim.config, self.sim.render_options)
+        self.inspector_panel.update_state(snapshot, stats, series)
+        self._sync_panel_visibility()
+        self._apply_responsive_layout()
+
+    def _sync_panel_visibility(self) -> None:
+        if self.sim.render_options.clean_ui:
+            self.control_panel.hide()
+            self.inspector_panel.hide()
+            return
+        self.control_panel.setVisible(self.toggle_controls_action.isChecked())
+        self.inspector_panel.setVisible(self.toggle_info_action.isChecked())
+
+    def _apply_responsive_layout(self) -> None:
+        width = self.width()
+        height = self.height()
+        # Три порога ширины и один по высоте управляют плотностью интерфейса.
+        compact = width < self.COMPACT_WIDTH or height < self.COMPACT_HEIGHT
+        narrow = width < self.NARROW_WIDTH
+        very_narrow = width < self.VERY_NARROW_WIDTH
+        short = height < self.SHORT_HEIGHT
+
+        self.top_bar.set_compact_mode(compact)
+        self.top_bar.set_short_mode(short)
+        self.bottom_strip.set_compact_mode(compact)
+        self.bottom_strip.set_short_mode(short)
+        self.control_panel.set_compact_mode(compact)
+        self.control_panel.set_short_mode(short)
+        self.inspector_panel.set_compact_mode(compact)
+        self.inspector_panel.set_short_mode(short)
+        self.stage_layout.setSpacing(6 if compact else 10)
+        self.shell_layout.setContentsMargins(10 if compact else 16, 8 if compact else 12, 8 if compact else 12, 8 if compact else 12)
+        self.statusBar().setVisible(not short)
+
+        if self.sim.render_options.clean_ui:
+            return
+
+        if very_narrow:
+            # На очень узком экране оставляем только сцену.
+            self._auto_hidden_controls = True
+            self._auto_hidden_inspector = True
+            self.control_panel.hide()
+            self.inspector_panel.hide()
+        elif narrow:
+            # На узком экране скрываем инспектор, но оставляем левую панель.
+            self._auto_hidden_controls = False
+            self._auto_hidden_inspector = True
+            self.control_panel.setVisible(self.toggle_controls_action.isChecked())
+            self.inspector_panel.hide()
+        else:
+            self._auto_hidden_controls = False
+            self._auto_hidden_inspector = False
+            self.control_panel.setVisible(self.toggle_controls_action.isChecked())
+            self.inspector_panel.setVisible(self.toggle_info_action.isChecked())
+
+        if very_narrow:
+            self.splitter.setSizes([0, max(320, width - 24), 0])
+        elif narrow:
+            self.splitter.setSizes([200 if self.control_panel.isVisible() else 0, max(380, width - 240), 0])
+        elif compact:
+            self.splitter.setSizes([
+                210 if self.control_panel.isVisible() else 0,
+                max(520, width - 470),
+                240 if self.inspector_panel.isVisible() else 0,
+            ])
+        else:
+            self.splitter.setSizes([
+                LEFT_PANEL_WIDTH if self.control_panel.isVisible() else 0,
+                max(640, width - LEFT_PANEL_WIDTH - RIGHT_PANEL_WIDTH - 40),
+                RIGHT_PANEL_WIDTH if self.inspector_panel.isVisible() else 0,
+            ])
+
+    def _toggle_play_pause(self) -> None:
+        self.sim.toggle_mode("paused")
+        self._refresh_ui()
+
+    def _step_once(self) -> None:
+        self.sim.step()
+        self._refresh_ui()
+
+    def _reset_system(self, planets: int) -> None:
+        self.sim.reset_system(planets)
+        self.canvas.fit_to_scene()
+        self._refresh_ui()
+
+    def _apply_named_preset(self, preset_id: str) -> None:
+        # Чтобы не ломать учебный сценарий, сохраняем состояние паузы пользователя.
+        was_paused = self.sim.paused
+        self.sim.apply_named_preset(preset_id)
+        self.sim.paused = was_paused
+        self.canvas.fit_to_scene()
+        self.toggle_info_action.setChecked(True)
+        self._refresh_ui()
+
+    def _set_g(self, value: float) -> None:
+        self.sim.set_g(value)
+        self._refresh_ui()
+
+    def _set_time_scale(self, value: float) -> None:
+        self.sim.set_time_scale(value)
+        self._refresh_ui()
+
+    def _set_mode(self, mode: str, enabled: bool) -> None:
+        self.sim.set_mode(mode, enabled)
+        self._refresh_ui()
+
+    def _set_asteroid_belt_density(self, count: int) -> None:
+        self.sim.set_asteroid_belt_density(count)
+        self._refresh_ui()
+
+    def _toggle_mode_named(self, mode: str) -> None:
+        self.sim.toggle_mode(mode)
+        self._refresh_ui()
+
+    def _set_selected_planet(self, index: int) -> None:
+        self.sim.set_selected_planet(index)
+        self._refresh_ui()
+
+    def _handle_canvas_selection(self, index: int) -> None:
+        self._set_selected_planet(index)
+        if not self.sim.render_options.clean_ui:
+            self.toggle_info_action.setChecked(True)
+            self._sync_panel_visibility()
+
+    def _select_prev_planet(self) -> None:
+        current = self.sim.selected_planet_idx - 1
+        if current < 1:
+            current = self.sim.num_planets
+        self._set_selected_planet(current)
+
+    def _select_next_planet(self) -> None:
+        current = self.sim.selected_planet_idx + 1
+        if current > self.sim.num_planets:
+            current = 1
+        self._set_selected_planet(current)
+
+    def _scale_speed(self, factor: float) -> None:
+        self.sim.set_speed_scale_for_selected(factor)
+        self._refresh_ui()
+
+    def _scale_mass(self, factor: float) -> None:
+        self.sim.set_mass_scale_for_selected(factor)
+        self._refresh_ui()
+
+    def _center_on_selected(self) -> None:
+        self.canvas.center_on_body_index(self.sim.selected_planet_idx)
+        self._refresh_ui()
+
+    def _set_follow_selected(self, enabled: bool) -> None:
+        if enabled:
+            self.sim.set_follow_target(self.sim.selected_planet_idx)
+            self.sim.set_cinematic_mode(True)
+        else:
+            self.sim.set_follow_target(None)
+        self._refresh_ui()
+
+    def _set_cinematic_mode(self, enabled: bool) -> None:
+        self.sim.set_cinematic_mode(enabled)
+        self._refresh_ui()
+
+    def _disable_follow_for_manual_camera(self) -> None:
+        # Любое ручное движение камеры отключает follow-режим.
+        if self.sim.render_options.cinematic_mode and self.sim.follow_target_index is not None:
+            self.sim.set_follow_target(None)
+            self.sim.set_camera_mode("manual")
+            self._refresh_ui()
+
+    def _set_clean_ui(self, enabled: bool) -> None:
+        self.sim.set_clean_ui(enabled)
+        self._sync_panel_visibility()
+        self._refresh_ui()
+
+    def _reset_view_manual(self) -> None:
+        self.sim.set_camera_mode("manual")
+        self.sim.set_follow_target(None)
+        self.canvas.reset_view()
+        self._refresh_ui()
+
+    def _set_render_zoom(self, zoom: float) -> None:
+        self.sim.set_render_zoom(zoom)
+        self._refresh_ui()
+
+    def _show_about(self) -> None:
+        QMessageBox.about(
+            self,
+            "О GravityLab",
+            "GravityLab — это canvas-first демонстрационная песочница гравитации на PyQt6.\n\n"
+            "Она сочетает учебную модель задачи N-тел с режимами камеры, демо-пресетами, overlays и компактной аналитикой.",
+        )
+
+    def _show_help_dialog(self) -> None:
+        if self.help_dialog is None:
+            self.help_dialog = HelpDialog(self.sim.preset_definitions(), self)
+        self.help_dialog.show()
+        self.help_dialog.raise_()
+        self.help_dialog.activateWindow()
+
+    def _set_night_theme_enabled(self, enabled: bool) -> None:
+        self._set_theme_mode("night" if enabled else "day")
+
+    def _set_theme_mode(self, mode: ThemeMode) -> None:
+        self.theme_mode = mode
+        app = QApplication.instance()
+        if app is not None:
+            apply_theme(app, mode)
+        night_enabled = mode == "night"
+        self.night_theme_action.blockSignals(True)
+        self.night_theme_action.setChecked(night_enabled)
+        self.night_theme_action.blockSignals(False)
+        self.top_bar.set_theme_mode(night_enabled)
+        self.canvas.update()
+        self.inspector_panel.update()
+
+    def _take_screenshot(self) -> None:
+        default_name = Path.cwd() / "gravitylab-screenshot.png"
+        path, _ = QFileDialog.getSaveFileName(
+            self,
+            "Сохранить снимок",
+            str(default_name),
+            "Изображения PNG (*.png)",
+        )
+        if not path:
+            return
+        if not self.canvas.export_screenshot(path):
+            QMessageBox.warning(self, "Не удалось сохранить снимок", "Не получилось записать PNG-файл.")
+
+    def _animate_entry(self) -> None:
+        group = QParallelAnimationGroup(self)
+        for widget in (self.control_panel, self.top_bar, self.bottom_strip, self.inspector_panel):
+            effect = QGraphicsOpacityEffect(widget)
+            widget.setGraphicsEffect(effect)
+            animation = QPropertyAnimation(effect, b"opacity", self)
+            animation.setDuration(520)
+            animation.setStartValue(0.0)
+            animation.setEndValue(1.0)
+            group.addAnimation(animation)
+        group.start()
+        self._entry_animation = group
+
+    def _restore_settings(self) -> None:
+        # Геометрия и splitter восстанавливаются первыми, чтобы UI собрался в прежнем виде.
+        geometry = self.settings.value("window/geometry")
+        splitter_state = self.settings.value("window/splitter_state")
+        if geometry is not None:
+            self.restoreGeometry(geometry)
+        if splitter_state is not None:
+            self.splitter.restoreState(splitter_state)
+
+        self.toggle_controls_action.setChecked(self.settings.value("view/control_visible", True, bool))
+        self.toggle_info_action.setChecked(True)
+        self.sim.render_options.show_grid = self.settings.value("render/show_grid", True, bool)
+        self.sim.render_options.show_trails = self.settings.value("render/show_trails", True, bool)
+        self.sim.render_options.show_theory = self.settings.value("render/show_theory", False, bool)
+        self.sim.render_options.show_labels = self.settings.value("render/show_labels", True, bool)
+        self.sim.render_options.show_sparklines = self.settings.value("render/show_sparklines", True, bool)
+        self.sim.render_options.clean_ui = self.settings.value("render/clean_ui", False, bool)
+        self.sim.render_options.cinematic_mode = self.settings.value("render/cinematic_mode", False, bool)
+        self.sim.only_sun = self.settings.value("render/only_sun", False, bool)
+        self.sim.asteroid_belt_count = self.settings.value(
+            "render/asteroid_belt_count",
+            self.sim.asteroid_belt_count,
+            int,
+        )
+        asteroid_belt_enabled = self.settings.value("render/asteroid_belt_enabled", False, bool)
+        self.sim.set_asteroid_belt_enabled(asteroid_belt_enabled)
+        self.sim.render_options.zoom = float(self.settings.value("render/zoom", 1.0))
+        self.theme_mode = self.settings.value("theme/mode", current_theme_mode(), str)
+        self._set_theme_mode("night" if self.theme_mode == "night" else "day")
+        self._sync_panel_visibility()
+
+    def _save_settings(self) -> None:
+        # При закрытии окна сохраняем все ключевые параметры учебной сцены.
+        self.settings.setValue("window/geometry", self.saveGeometry())
+        self.settings.setValue("window/splitter_state", self.splitter.saveState())
+        self.settings.setValue("view/control_visible", self.toggle_controls_action.isChecked())
+        self.settings.setValue("view/info_visible", self.toggle_info_action.isChecked())
+        self.settings.setValue("render/show_grid", self.sim.render_options.show_grid)
+        self.settings.setValue("render/show_trails", self.sim.render_options.show_trails)
+        self.settings.setValue("render/show_theory", self.sim.render_options.show_theory)
+        self.settings.setValue("render/show_labels", self.sim.render_options.show_labels)
+        self.settings.setValue("render/show_sparklines", self.sim.render_options.show_sparklines)
+        self.settings.setValue("render/clean_ui", self.sim.render_options.clean_ui)
+        self.settings.setValue("render/cinematic_mode", self.sim.render_options.cinematic_mode)
+        self.settings.setValue("render/only_sun", self.sim.only_sun)
+        self.settings.setValue("render/asteroid_belt_enabled", self.sim.asteroid_belt_enabled)
+        self.settings.setValue("render/asteroid_belt_count", self.sim.asteroid_belt_count)
+        self.settings.setValue("render/zoom", self.sim.render_options.zoom)
+        self.settings.setValue("theme/mode", self.theme_mode)
+
+```
+
+---
+
+## Файл: `src/gravitylab/theme.py`
+
+**Назначение:** Палитры (день/ночь), стили Qt, утилиты цвета и применение темы интерфейса.
+
+```python
+from __future__ import annotations
+
+import sys
+from dataclasses import dataclass
+import re
+from typing import Literal
+
+from PyQt6.QtGui import QColor, QFont
+from PyQt6.QtWidgets import QApplication
+
+
+ThemeMode = Literal["day", "night"]
+
+LEFT_PANEL_WIDTH = 248
+RIGHT_PANEL_WIDTH = 248
+WINDOW_WIDTH = 1560
+WINDOW_HEIGHT = 940
+
+
+@dataclass(frozen=True)
+class ThemePalette:
+    bg_top: str
+    bg_bottom: str
+    panel: str
+    card: str
+    card_alt: str
+    border: str
+    border_strong: str
+    text: str
+    text_muted: str
+    accent: str
+    accent_soft: str
+    gold: str
+    glow: str
+    success: str
+    menu_bg: str
+    status_bg: str
+    overlay_bg: str
+    pill_bg: str
+    button_bg: str
+    button_hover: str
+    button_pressed: str
+    button_checked: str
+    combo_bg: str
+    slider_groove: str
+    checkbox_bg: str
+    canvas_top: str
+    canvas_mid: str
+    canvas_bottom: str
+    canvas_nebula_left: str
+    canvas_nebula_left_soft: str
+    canvas_nebula_right: str
+    canvas_nebula_right_soft: str
+    canvas_star: str
+    grid_minor: str
+    grid_major: str
+    clean_badge_bg: str
+    clean_badge_border: str
+    clean_badge_text: str
+    label_connector: str
+    label_bg: str
+    label_bg_selected: str
+    label_text: str
+    label_text_selected: str
+    spark_bg: str
+
+
+DAY_PALETTE = ThemePalette(
+    bg_top="#f3f9ff",
+    bg_bottom="#dcecff",
+    panel="rgba(255, 255, 255, 0.76)",
+    card="rgba(255, 255, 255, 0.90)",
+    card_alt="rgba(245, 250, 255, 0.96)",
+    border="rgba(77, 128, 188, 0.22)",
+    border_strong="rgba(77, 128, 188, 0.42)",
+    text="#17304f",
+    text_muted="#58779b",
+    accent="#2e8fe8",
+    accent_soft="rgba(46, 143, 232, 0.14)",
+    gold="#d79a2b",
+    glow="rgba(46, 143, 232, 0.12)",
+    success="#2ca96b",
+    menu_bg="rgba(247, 251, 255, 0.98)",
+    status_bg="rgba(243, 248, 255, 0.95)",
+    overlay_bg="rgba(255, 255, 255, 0.72)",
+    pill_bg="rgba(243, 248, 255, 0.96)",
+    button_bg="rgba(247, 251, 255, 0.98)",
+    button_hover="rgba(233, 242, 252, 1.00)",
+    button_pressed="rgba(223, 235, 249, 1.00)",
+    button_checked="rgba(73, 144, 216, 0.92)",
+    combo_bg="rgba(247, 251, 255, 0.98)",
+    slider_groove="rgba(113, 147, 185, 0.24)",
+    checkbox_bg="rgba(247, 251, 255, 0.98)",
+    canvas_top="#edf7ff",
+    canvas_mid="#d6ecff",
+    canvas_bottom="#bddfff",
+    canvas_nebula_left="rgba(142, 200, 255, 0.18)",
+    canvas_nebula_left_soft="rgba(142, 200, 255, 0.06)",
+    canvas_nebula_right="rgba(96, 163, 235, 0.22)",
+    canvas_nebula_right_soft="rgba(96, 163, 235, 0.08)",
+    canvas_star="#ffffff",
+    grid_minor="rgba(83, 125, 172, 0.14)",
+    grid_major="rgba(67, 104, 149, 0.28)",
+    clean_badge_bg="rgba(255, 255, 255, 0.78)",
+    clean_badge_border="rgba(88, 128, 174, 0.34)",
+    clean_badge_text="#17304f",
+    label_connector="rgba(72, 113, 158, 0.42)",
+    label_bg="rgba(255, 255, 255, 0.84)",
+    label_bg_selected="rgba(231, 244, 255, 0.95)",
+    label_text="#17304f",
+    label_text_selected="#0f2742",
+    spark_bg="rgba(232, 242, 252, 0.92)",
+)
+
+NIGHT_PALETTE = ThemePalette(
+    bg_top="#030914",
+    bg_bottom="#0a1630",
+    panel="rgba(7, 16, 30, 0.90)",
+    card="rgba(12, 24, 46, 0.88)",
+    card_alt="rgba(10, 20, 38, 0.95)",
+    border="rgba(121, 163, 221, 0.22)",
+    border_strong="rgba(121, 163, 221, 0.40)",
+    text="#edf4ff",
+    text_muted="#8ea6cb",
+    accent="#6cbcff",
+    accent_soft="rgba(108, 188, 255, 0.18)",
+    gold="#ffd36e",
+    glow="rgba(79, 131, 255, 0.20)",
+    success="#8ee6b8",
+    menu_bg="rgba(8, 16, 30, 0.98)",
+    status_bg="rgba(6, 12, 22, 0.80)",
+    overlay_bg="rgba(8, 16, 30, 0.78)",
+    pill_bg="rgba(14, 26, 49, 0.90)",
+    button_bg="rgba(14, 26, 49, 0.96)",
+    button_hover="rgba(22, 39, 71, 0.98)",
+    button_pressed="rgba(10, 20, 38, 0.98)",
+    button_checked="rgba(48, 94, 158, 0.86)",
+    combo_bg="rgba(10, 20, 38, 0.96)",
+    slider_groove="rgba(58, 80, 112, 0.34)",
+    checkbox_bg="rgba(10, 20, 38, 0.95)",
+    canvas_top="#020913",
+    canvas_mid="#030914",
+    canvas_bottom="#0a1630",
+    canvas_nebula_left="rgba(38, 76, 144, 0.19)",
+    canvas_nebula_left_soft="rgba(15, 32, 64, 0.05)",
+    canvas_nebula_right="rgba(54, 89, 150, 0.33)",
+    canvas_nebula_right_soft="rgba(33, 66, 124, 0.13)",
+    canvas_star="#ffffff",
+    grid_minor="rgba(130, 161, 207, 0.07)",
+    grid_major="rgba(182, 202, 235, 0.20)",
+    clean_badge_bg="rgba(9, 17, 30, 0.72)",
+    clean_badge_border="rgba(112, 147, 201, 0.28)",
+    clean_badge_text="#edf4ff",
+    label_connector="rgba(112, 147, 201, 0.43)",
+    label_bg="rgba(7, 15, 27, 0.80)",
+    label_bg_selected="rgba(7, 15, 27, 0.88)",
+    label_text="#e7f0ff",
+    label_text_selected="#ffffff",
+    spark_bg="rgba(8, 15, 28, 0.74)",
+)
+
+_CURRENT_THEME_MODE: ThemeMode = "day"
+PALETTE = DAY_PALETTE
+
+
+def preferred_font_family() -> str:
+    if sys.platform == "darwin":
+        return "Helvetica Neue"
+    if sys.platform.startswith("win"):
+        return "Segoe UI"
+    return "Helvetica Neue"
+
+
+def title_font() -> QFont:
+    font = QFont(preferred_font_family(), 16)
+    font.setWeight(QFont.Weight.DemiBold)
+    return font
+
+
+def body_font() -> QFont:
+    return QFont(preferred_font_family(), 10)
+
+
+def mono_font() -> QFont:
+    family = "SF Mono" if sys.platform == "darwin" else "Consolas"
+    return QFont(family, 10)
+
+
+def current_theme_mode() -> ThemeMode:
+    return _CURRENT_THEME_MODE
+
+
+def current_palette() -> ThemePalette:
+    return PALETTE
+
+
+def set_theme_mode(mode: ThemeMode) -> ThemePalette:
+    global _CURRENT_THEME_MODE, PALETTE
+    _CURRENT_THEME_MODE = mode
+    PALETTE = NIGHT_PALETTE if mode == "night" else DAY_PALETTE
+    return PALETTE
+
+
+def accent_color(alpha: int = 255) -> QColor:
+    color = qcolor(current_palette().accent)
+    color.setAlpha(alpha)
+    return color
+
+
+def qcolor(value: str) -> QColor:
+    color = QColor(value)
+    if color.isValid():
+        return color
+
+    rgba_match = re.fullmatch(
+        r"rgba\(\s*(\d{1,3})\s*,\s*(\d{1,3})\s*,\s*(\d{1,3})\s*,\s*([0-9]*\.?[0-9]+)\s*\)",
+        value,
+    )
+    if rgba_match:
+        red, green, blue, alpha = rgba_match.groups()
+        alpha_value = float(alpha)
+        if alpha_value <= 1.0:
+            alpha_value *= 255.0
+        return QColor(int(red), int(green), int(blue), max(0, min(255, int(round(alpha_value)))))
+
+    rgb_match = re.fullmatch(r"rgb\(\s*(\d{1,3})\s*,\s*(\d{1,3})\s*,\s*(\d{1,3})\s*\)", value)
+    if rgb_match:
+        red, green, blue = rgb_match.groups()
+        return QColor(int(red), int(green), int(blue))
+
+    return QColor("#000000")
+
+
+def build_stylesheet() -> str:
+    palette = current_palette()
+    return f"""
+    QWidget {{
+        color: {palette.text};
+        background: transparent;
+        font-family: "{preferred_font_family()}";
+        font-size: 13px;
+    }}
+    QMainWindow {{
+        background: qlineargradient(
+            x1: 0, y1: 0, x2: 0, y2: 1,
+            stop: 0 {palette.bg_top}, stop: 1 {palette.bg_bottom}
+        );
+    }}
+    QDialog {{
+        background: qlineargradient(
+            x1: 0, y1: 0, x2: 0, y2: 1,
+            stop: 0 {palette.bg_top}, stop: 1 {palette.bg_bottom}
+        );
+    }}
+    QStatusBar {{
+        background: {palette.status_bg};
+        border-top: 1px solid {palette.border};
+    }}
+    QMenuBar {{
+        background: {palette.menu_bg};
+        border-bottom: 1px solid {palette.border};
+    }}
+    QMenuBar::item:selected, QMenu::item:selected {{
+        background: {palette.accent_soft};
+    }}
+    QMenu {{
+        background: {palette.menu_bg};
+        border: 1px solid {palette.border};
+    }}
+    QFrame#panelShell {{
+        background: {palette.panel};
+        border: 1px solid {palette.border};
+        border-radius: 24px;
+    }}
+    QFrame#metricCard {{
+        background: qlineargradient(
+            x1: 0, y1: 0, x2: 0, y2: 1,
+            stop: 0 {palette.card}, stop: 1 {palette.card_alt}
+        );
+        border: 1px solid {palette.border};
+        border-radius: 18px;
+    }}
+    QFrame#panelDivider {{
+        min-height: 1px;
+        max-height: 1px;
+        background: {palette.border};
+        border: none;
+        margin: 4px 0;
+    }}
+    QFrame#topBar, QFrame#bottomStrip {{
+        background: {palette.overlay_bg};
+        border: 1px solid {palette.border};
+        border-radius: 18px;
+    }}
+    QLabel#eyebrow {{
+        color: {palette.gold};
+        font-size: 11px;
+        letter-spacing: 1px;
+        text-transform: uppercase;
+    }}
+    QLabel#overlayTitle {{
+        font-size: 16px;
+        font-weight: 650;
+    }}
+    QLabel#overlayPill {{
+        background: {palette.pill_bg};
+        border: 1px solid {palette.border};
+        border-radius: 11px;
+        padding: 6px 10px;
+    }}
+    QLabel#summaryBlock {{
+        color: {palette.text};
+        background: {palette.accent_soft};
+        border: 1px solid {palette.border};
+        border-radius: 14px;
+        padding: 10px 12px;
+    }}
+    QLabel#dataBlock {{
+        color: {palette.text};
+        background: transparent;
+    }}
+    QLabel#mutedText {{
+        color: {palette.text_muted};
+    }}
+    QLabel#sectionTitle {{
+        font-size: 16px;
+        font-weight: 650;
+    }}
+    QPushButton {{
+        background: {palette.button_bg};
+        border: 1px solid {palette.border};
+        border-radius: 12px;
+        padding: 9px 13px;
+        min-height: 18px;
+    }}
+    QPushButton:hover {{
+        background: {palette.button_hover};
+        border-color: {palette.border_strong};
+    }}
+    QPushButton:pressed {{
+        background: {palette.button_pressed};
+    }}
+    QPushButton:checked {{
+        background: {palette.button_checked};
+        border-color: {palette.border_strong};
+    }}
+    QPushButton#accentButton {{
+        background: {palette.button_checked};
+        border-color: {palette.border_strong};
+        font-weight: 650;
+    }}
+    QPushButton#accentButton:hover {{
+        background: {palette.accent};
+    }}
+    QComboBox, QToolBox::tab, QLineEdit {{
+        background: {palette.combo_bg};
+        border: 1px solid {palette.border};
+        border-radius: 10px;
+        padding: 8px 10px;
+        min-height: 18px;
+    }}
+    QComboBox QAbstractItemView {{
+        background: {palette.menu_bg};
+        border: 1px solid {palette.border};
+        selection-background-color: {palette.accent_soft};
+    }}
+    QTextBrowser, QTextEdit, QPlainTextEdit {{
+        background: {palette.card_alt};
+        color: {palette.text};
+        border: 1px solid {palette.border};
+        border-radius: 16px;
+        padding: 12px;
+        selection-background-color: {palette.accent_soft};
+    }}
+    QTabWidget::pane {{
+        background: {palette.card_alt};
+        border: 1px solid {palette.border};
+        border-radius: 16px;
+        top: -1px;
+    }}
+    QTabBar::tab {{
+        background: {palette.combo_bg};
+        color: {palette.text_muted};
+        border: 1px solid {palette.border};
+        border-bottom: none;
+        border-top-left-radius: 10px;
+        border-top-right-radius: 10px;
+        padding: 8px 14px;
+        margin-right: 6px;
+    }}
+    QTabBar::tab:selected {{
+        background: {palette.card_alt};
+        color: {palette.text};
+        border-color: {palette.border_strong};
+    }}
+    QTabBar::tab:hover:!selected {{
+        background: {palette.button_hover};
+        color: {palette.text};
+    }}
+    QSlider::groove:horizontal {{
+        height: 6px;
+        background: {palette.slider_groove};
+        border-radius: 3px;
+    }}
+    QSlider::handle:horizontal {{
+        background: {palette.accent};
+        border: 1px solid rgba(255,255,255,0.2);
+        width: 16px;
+        margin: -6px 0;
+        border-radius: 8px;
+    }}
+    QCheckBox {{
+        spacing: 8px;
+    }}
+    QCheckBox::indicator {{
+        width: 18px;
+        height: 18px;
+        border-radius: 5px;
+        border: 1px solid {palette.border};
+        background: {palette.checkbox_bg};
+    }}
+    QCheckBox::indicator:checked {{
+        background: {palette.accent};
+    }}
+    QScrollArea {{
+        border: none;
+    }}
+    QScrollBar:vertical {{
+        background: transparent;
+        width: 10px;
+        margin: 4px 0 4px 0;
+    }}
+    QScrollBar::handle:vertical {{
+        background: {palette.border_strong};
+        border-radius: 5px;
+        min-height: 28px;
+    }}
+    QScrollBar::handle:vertical:hover {{
+        background: {palette.accent};
+    }}
+    QScrollBar::add-line:vertical, QScrollBar::sub-line:vertical,
+    QScrollBar::add-page:vertical, QScrollBar::sub-page:vertical {{
+        background: transparent;
+        border: none;
+        height: 0px;
+    }}
+    QToolTip {{
+        background: {palette.card_alt};
+        color: {palette.text};
+        border: 1px solid {palette.border_strong};
+        padding: 6px 8px;
+        border-radius: 8px;
+    }}
+    QSplitter::handle {{
+        background: transparent;
+        width: 8px;
+    }}
+    QToolBox::tab {{
+        margin-top: 8px;
+        font-weight: 600;
+    }}
+    """
+
+
+def apply_theme(app: QApplication, mode: ThemeMode | None = None) -> None:
+    if mode is not None:
+        set_theme_mode(mode)
+    app.setStyle("Fusion")
+    app.setStyleSheet(build_stylesheet())
+
+```
+
+---
+
+## Файл: `src/gravitylab/sim/__init__.py`
+
+**Назначение:** Пакет симуляции (namespace-модуль).
+
+```python
+from .model import (
+    Body,
+    BodySeed,
+    BodySeriesSnapshot,
+    BodySnapshot,
+    GravitySim,
+    PresetDefinition,
+    RenderOptions,
+    SimulationConfig,
+    SimulationSnapshot,
+    SimulationStats,
+)
+
+__all__ = [
+    "Body",
+    "BodySeed",
+    "BodySeriesSnapshot",
+    "BodySnapshot",
+    "GravitySim",
+    "PresetDefinition",
+    "RenderOptions",
+    "SimulationConfig",
+    "SimulationSnapshot",
+    "SimulationStats",
+]
+
+```
+
+---
+
+## Файл: `src/gravitylab/sim/model.py`
+
+**Назначение:** Ядро физики: модели данных, пресеты, шаг интегрирования, режимы сцены, snapshot и метрики.
+
+```python
+from __future__ import annotations
+
+import math
+import random
+from collections import deque
+from dataclasses import dataclass
+from typing import Literal
+
+
+ColorRGB = tuple[int, int, int]
+CameraMode = Literal["manual", "follow_selected", "follow_sun", "auto_frame"]
+ModeName = Literal["trails", "grid", "theory", "labels", "only_sun", "paused", "asteroid_belt"]
+
+
+@dataclass
+class Body:
+    name: str
+    mass: float
+    radius_px: int
+    x: float
+    y: float
+    vx: float
+    vy: float
+    color: ColorRGB
+    trail: deque[tuple[float, float]]
+    is_asteroid: bool = False
+
+
+@dataclass(frozen=True)
+class BodySnapshot:
+    index: int
+    name: str
+    mass: float
+    radius_px: int
+    x: float
+    y: float
+    vx: float
+    vy: float
+    color: ColorRGB
+    trail: tuple[tuple[float, float], ...]
+    is_asteroid: bool
+
+
+@dataclass(frozen=True)
+class BodySeed:
+    name: str
+    radius: float
+    angle_deg: float
+    speed_scale: float = 1.0
+    radial_bias: float = 0.0
+    angle_velocity_bias_deg: float = 0.0
+    color: ColorRGB | None = None
+
+
+@dataclass(frozen=True)
+class SimulationConfig:
+    g: float = 1.0
+    dt: float = 0.02
+    softening: float = 8.0
+    sun_mass: float = 332946.0
+    sun_radius_px: int = 35
+    planet_mass: float = 1.0
+    planet_radius_px: int = 7
+    trail_len: int = 900
+    default_planets: int = 3
+    history_len: int = 240
+    asteroid_belt_count: int = 96
+    mass_to_sim_units: float = 5000.0 / 332946.0
+
+
+@dataclass
+class RenderOptions:
+    show_grid: bool = True
+    show_trails: bool = True
+    show_theory: bool = True
+    show_labels: bool = True
+    clean_ui: bool = False
+    cinematic_mode: bool = False
+    follow_selected: bool = False
+    show_sparklines: bool = True
+    label_zoom_threshold: float = 0.6
+    background_variant: str = "nebula"
+    trail_alpha: int = 145
+    zoom: float = 1.0
+
+
+@dataclass(frozen=True)
+class SimulationStats:
+    fps: float
+    sim_time: float
+    step_count: int
+    body_count: int
+    selected_index: int
+    selected_speed: float
+    selected_radius: float
+
+
+@dataclass(frozen=True)
+class BodySeriesSnapshot:
+    distance_history: tuple[float, ...]
+    speed_history: tuple[float, ...]
+
+
+@dataclass(frozen=True)
+class PresetDefinition:
+    id: str
+    label: str
+    description: str
+    planet_count: int
+    initial_state: tuple[BodySeed, ...]
+    selected_index: int
+    camera_mode: CameraMode
+    render_defaults: RenderOptions
+    gravity: float | None = None
+    time_scale: float | None = None
+    asteroid_belt_enabled: bool = False
+    asteroid_belt_count: int | None = None
+    asteroid_belt_inner_radius: float | None = None
+    asteroid_belt_outer_radius: float | None = None
+
+
+@dataclass(frozen=True)
+class SimulationSnapshot:
+    bodies: tuple[BodySnapshot, ...]
+    selected_index: int
+    num_planets: int
+    g: float
+    only_sun: bool
+    paused: bool
+    time_scale: float
+    render_options: RenderOptions
+    camera_mode: CameraMode
+    follow_target_index: int | None
+    active_preset: str | None
+    asteroid_belt_enabled: bool
+    asteroid_belt_count: int
+
+
+class GravitySim:
+    """Учебный 2D-симулятор N-тел с состоянием, удобным для UI."""
+
+    USE_EXPLICIT_EULER = False
+    BODY_NAMES = (
+        "Солнце",
+        "Меркурий",
+        "Венера",
+        "Земля",
+        "Марс",
+        "Юпитер",
+        "Сатурн",
+        "Уран",
+        "Нептун",
+        "Плутон",
+    )
+    BODY_MASSES_EARTH = {
+        "Солнце": 332946.0,
+        "Меркурий": 0.0553,
+        "Венера": 0.815,
+        "Земля": 1.0,
+        "Марс": 0.107,
+        "Юпитер": 317.8,
+        "Юпитер I": 317.8,
+        "Юпитер II": 317.8,
+        "Сатурн": 95.16,
+        "Уран": 14.54,
+        "Нептун": 17.15,
+        "Плутон": 0.00218,
+    }
+    ASTEROID_MASS_EARTH = 0.0002
+
+    def __init__(
+        self,
+        config: SimulationConfig | None = None,
+        render_options: RenderOptions | None = None,
+    ) -> None:
+        # Конфиг физики (dt, G, softening, массы) и флаги рендера задаются отдельно.
+        self.config = config or SimulationConfig()
+        self.render_options = render_options or RenderOptions()
+        # Пресеты - готовые учебные сцены с начальными условиями.
+        self.presets = self._build_presets()
+
+        self.num_planets = self.config.default_planets
+        self.selected_planet_idx = 1
+        self.only_sun = False
+        self.paused = False
+        self.time_scale = 1.0
+        self.step_count = 0
+        self.sim_time = 0.0
+        self.fps = 0.0
+        self.camera_mode: CameraMode = "manual"
+        self.follow_target_index: int | None = None
+        self.active_preset: str | None = None
+        self.asteroid_belt_enabled = False
+        self.asteroid_belt_count = self.config.asteroid_belt_count
+        self.bodies: list[Body] = []
+        self._distance_history: dict[int, deque[float]] = {}
+        self._speed_history: dict[int, deque[float]] = {}
+        self._current_seeds: tuple[BodySeed, ...] = ()
+        self._asteroid_belt_range_override: tuple[float, float] | None = None
+
+        self.apply_named_preset("three-orbits")
+
+    @property
+    def g(self) -> float:
+        return self.config.g
+
+    @g.setter
+    def g(self, value: float) -> None:
+        # Ограничиваем G, чтобы симуляция оставалась устойчивой и управляемой.
+        self.config = SimulationConfig(**{**self.config.__dict__, "g": max(0.0, min(12.0, value))})
+
+    def reset_system(self, n_planets: int) -> None:
+        self._create_default_system(max(1, min(9, int(n_planets))))
+        self.active_preset = None
+        self.camera_mode = "manual"
+        self.follow_target_index = None
+        self.render_options.follow_selected = False
+
+    def apply_preset(self, preset_name: str) -> None:
+        preset_map = {
+            "1 planet": "single-orbit",
+            "3 planets": "three-orbits",
+            "5 planets": "chaos",
+            "chaotic setup": "chaos",
+        }
+        preset_id = preset_map.get(preset_name.lower())
+        if preset_id is None:
+            raise ValueError(f"Unknown preset: {preset_name}")
+        self.apply_named_preset(preset_id)
+
+    def preset_definitions(self) -> tuple[PresetDefinition, ...]:
+        return tuple(self.presets.values())
+
+    def apply_named_preset(self, preset_id: str) -> None:
+        if preset_id not in self.presets:
+            raise ValueError(f"Unknown preset: {preset_id}")
+        preset = self.presets[preset_id]
+
+        # Пресет может менять "глобальные" параметры сцены.
+        if preset.gravity is not None:
+            self.set_g(preset.gravity)
+        if preset.time_scale is not None:
+            self.set_time_scale(preset.time_scale)
+
+        self.asteroid_belt_enabled = preset.asteroid_belt_enabled
+        if preset.asteroid_belt_count is not None:
+            self.asteroid_belt_count = preset.asteroid_belt_count
+        self._asteroid_belt_range_override = (
+            (preset.asteroid_belt_inner_radius, preset.asteroid_belt_outer_radius)
+            if preset.asteroid_belt_inner_radius is not None and preset.asteroid_belt_outer_radius is not None
+            else None
+        )
+
+        self._apply_seeded_system(preset.initial_state)
+        self.active_preset = preset.label
+        self.set_selected_planet(preset.selected_index)
+
+        # Пресет также задаёт стартовые визуальные режимы.
+        self.render_options.show_grid = preset.render_defaults.show_grid
+        self.render_options.show_trails = preset.render_defaults.show_trails
+        self.render_options.show_theory = preset.render_defaults.show_theory
+        self.render_options.show_labels = preset.render_defaults.show_labels
+        self.render_options.show_sparklines = preset.render_defaults.show_sparklines
+        self.render_options.label_zoom_threshold = preset.render_defaults.label_zoom_threshold
+        self.render_options.cinematic_mode = preset.render_defaults.cinematic_mode
+        self.render_options.follow_selected = preset.render_defaults.follow_selected
+
+        self.camera_mode = preset.camera_mode
+        if preset.camera_mode == "follow_sun":
+            self.follow_target_index = 0
+        elif preset.camera_mode == "follow_selected":
+            self.follow_target_index = self.selected_planet_idx
+        else:
+            self.follow_target_index = None
+
+    def set_num_planets(self, n_planets: int) -> None:
+        self.reset_system(n_planets)
+
+    def set_selected_planet(self, index: int) -> None:
+        if not self.bodies:
+            self.selected_planet_idx = 1
+            return
+        self.selected_planet_idx = max(1, min(self.num_planets, int(index)))
+        if self.render_options.follow_selected or self.camera_mode == "follow_selected":
+            self.follow_target_index = self.selected_planet_idx
+            self.camera_mode = "follow_selected"
+
+    def set_speed_scale_for_selected(self, factor: float) -> None:
+        if len(self.bodies) <= self.selected_planet_idx:
+            return
+        body = self.bodies[self.selected_planet_idx]
+        body.vx *= factor
+        body.vy *= factor
+
+    def set_mass_scale_for_selected(self, factor: float) -> None:
+        if len(self.bodies) <= self.selected_planet_idx:
+            return
+        body = self.bodies[self.selected_planet_idx]
+        body.mass = max(0.0001, min(1_000_000.0, body.mass * factor))
+
+    def set_time_scale(self, scale: float) -> None:
+        # Слишком большие значения делают модель "рваной", поэтому есть верхняя граница.
+        self.time_scale = max(0.05, min(50.0, scale))
+
+    def set_g(self, value: float) -> None:
+        self.g = value
+
+    def set_render_zoom(self, zoom: float) -> None:
+        # Зум хранится в модели, чтобы UI и физическая сцена были синхронизированы.
+        self.render_options.zoom = max(0.2, min(4.0, zoom))
+
+    def set_clean_ui(self, enabled: bool) -> None:
+        self.render_options.clean_ui = enabled
+
+    def set_cinematic_mode(self, enabled: bool) -> None:
+        self.render_options.cinematic_mode = enabled
+        if enabled:
+            if self.follow_target_index is None:
+                self.set_follow_target(self.selected_planet_idx)
+            if self.camera_mode == "manual":
+                self.camera_mode = "follow_selected"
+        else:
+            self.camera_mode = "manual"
+            self.render_options.follow_selected = False
+            self.follow_target_index = None
+
+    def set_follow_target(self, index: int | None) -> None:
+        if index is None:
+            self.follow_target_index = None
+            self.render_options.follow_selected = False
+            if self.render_options.cinematic_mode:
+                self.camera_mode = "manual"
+            return
+
+        clamped = max(0, min(len(self.bodies) - 1, int(index))) if self.bodies else None
+        if clamped is None:
+            return
+        self.follow_target_index = clamped
+        self.render_options.follow_selected = clamped != 0
+        self.camera_mode = "follow_sun" if clamped == 0 else "follow_selected"
+
+    def set_camera_mode(self, mode: CameraMode) -> None:
+        self.camera_mode = mode
+        if mode == "manual":
+            self.follow_target_index = None
+            self.render_options.follow_selected = False
+            return
+        if mode == "follow_sun":
+            self.follow_target_index = 0
+            self.render_options.follow_selected = False
+            return
+        if mode == "follow_selected":
+            self.follow_target_index = self.selected_planet_idx
+            self.render_options.follow_selected = True
+            return
+        self.follow_target_index = None
+
+    def set_fps(self, fps: float) -> None:
+        self.fps = max(0.0, fps)
+
+    def toggle_mode(self, mode: ModeName) -> None:
+        if mode == "trails":
+            self.render_options.show_trails = not self.render_options.show_trails
+            if not self.render_options.show_trails:
+                for body in self.bodies:
+                    body.trail.clear()
+            return
+        if mode == "grid":
+            self.render_options.show_grid = not self.render_options.show_grid
+            return
+        if mode == "theory":
+            self.render_options.show_theory = not self.render_options.show_theory
+            return
+        if mode == "labels":
+            self.render_options.show_labels = not self.render_options.show_labels
+            return
+        if mode == "only_sun":
+            self.only_sun = not self.only_sun
+            return
+        if mode == "paused":
+            self.paused = not self.paused
+            return
+        if mode == "asteroid_belt":
+            self.set_asteroid_belt_enabled(not self.asteroid_belt_enabled)
+            return
+        raise ValueError(f"Unknown mode: {mode}")
+
+    def set_mode(self, mode: ModeName, enabled: bool) -> None:
+        current = self.get_mode(mode)
+        if current != enabled:
+            self.toggle_mode(mode)
+
+    def get_mode(self, mode: ModeName) -> bool:
+        if mode == "trails":
+            return self.render_options.show_trails
+        if mode == "grid":
+            return self.render_options.show_grid
+        if mode == "theory":
+            return self.render_options.show_theory
+        if mode == "labels":
+            return self.render_options.show_labels
+        if mode == "only_sun":
+            return self.only_sun
+        if mode == "paused":
+            return self.paused
+        if mode == "asteroid_belt":
+            return self.asteroid_belt_enabled
+        raise ValueError(f"Unknown mode: {mode}")
+
+    def set_asteroid_belt_enabled(self, enabled: bool) -> None:
+        enabled = bool(enabled)
+        if self.asteroid_belt_enabled == enabled:
+            return
+        self.asteroid_belt_enabled = enabled
+        # Пересобираем систему из тех же seed-ов, чтобы корректно добавить/убрать астероиды.
+        selected_index = self.selected_planet_idx
+        active_preset = self.active_preset
+        self._apply_seeded_system(self._current_seeds)
+        self.selected_planet_idx = max(1, min(self.num_planets, selected_index))
+        self.active_preset = active_preset
+
+    def set_asteroid_belt_density(self, count: int) -> None:
+        # Плотность ограничена, чтобы не перегрузить рендер и тесты.
+        clamped = max(0, min(240, int(count)))
+        if self.asteroid_belt_count == clamped:
+            return
+        self.asteroid_belt_count = clamped
+        if self.asteroid_belt_enabled:
+            selected_index = self.selected_planet_idx
+            active_preset = self.active_preset
+            self._apply_seeded_system(self._current_seeds)
+            self.selected_planet_idx = max(1, min(self.num_planets, selected_index))
+            self.active_preset = active_preset
+
+    def step(self, dt: float | None = None) -> None:
+        # Реальный шаг интегрирования: базовый dt * пользовательский масштаб времени.
+        step_dt = (dt if dt is not None else self.config.dt) * self.time_scale
+        acc = self.compute_accelerations()
+
+        if self.USE_EXPLICIT_EULER:
+            # Классический явный Эйлер: сначала координаты, потом скорость.
+            for i, body in enumerate(self.bodies):
+                ax, ay = acc[i]
+                body.x += body.vx * step_dt
+                body.y += body.vy * step_dt
+                body.vx += ax * step_dt
+                body.vy += ay * step_dt
+        else:
+            # Полу-неявный вариант обычно устойчивее для орбитальных сцен.
+            for i, body in enumerate(self.bodies):
+                ax, ay = acc[i]
+                body.vx += ax * step_dt
+                body.vy += ay * step_dt
+                body.x += body.vx * step_dt
+                body.y += body.vy * step_dt
+
+        if self.render_options.show_trails:
+            # Следы хранятся как очередь фиксированной длины.
+            for body in self.bodies:
+                body.trail.append((body.x, body.y))
+
+        self.step_count += 1
+        self.sim_time += step_dt
+        self.advance_metrics_history()
+
+    def advance_metrics_history(self) -> None:
+        if not self.bodies:
+            return
+        sun = self.bodies[0]
+        for index, body in enumerate(self.bodies[1:], start=1):
+            if body.is_asteroid:
+                continue
+            distance = math.hypot(body.x - sun.x, body.y - sun.y)
+            speed = math.hypot(body.vx, body.vy)
+            self._distance_history[index].append(distance)
+            self._speed_history[index].append(speed)
+
+    def selected_body_series(self) -> BodySeriesSnapshot:
+        index = self.selected_planet_idx
+        return BodySeriesSnapshot(
+            distance_history=tuple(self._distance_history.get(index, deque())),
+            speed_history=tuple(self._speed_history.get(index, deque())),
+        )
+
+    def compute_accelerations(self) -> list[tuple[float, float]]:
+        n_bodies = len(self.bodies)
+        ax = [0.0] * n_bodies
+        ay = [0.0] * n_bodies
+
+        if n_bodies <= 1:
+            return list(zip(ax, ay))
+
+        if self.only_sun:
+            # Упрощённый учебный режим: каждая планета чувствует только Солнце.
+            sun = self.bodies[0]
+            for i in range(1, n_bodies):
+                body = self.bodies[i]
+                force_x, force_y = self._accel_from_to(body.x, body.y, sun.x, sun.y, sun.mass)
+                ax[i] += force_x
+                ay[i] += force_y
+            return list(zip(ax, ay))
+
+        # Полная N-body модель: суммируем вклад каждого тела для каждого тела.
+        for i, body_i in enumerate(self.bodies):
+            for j, body_j in enumerate(self.bodies):
+                if i == j:
+                    continue
+                force_x, force_y = self._accel_from_to(
+                    body_i.x,
+                    body_i.y,
+                    body_j.x,
+                    body_j.y,
+                    body_j.mass,
+                )
+                ax[i] += force_x
+                ay[i] += force_y
+
+        return list(zip(ax, ay))
+
+    def selected_body(self) -> Body:
+        return self.bodies[self.selected_planet_idx]
+
+    def stats(self) -> SimulationStats:
+        body = self.selected_body()
+        speed = math.hypot(body.vx, body.vy)
+        distance = math.hypot(body.x - self.bodies[0].x, body.y - self.bodies[0].y)
+        return SimulationStats(
+            fps=self.fps,
+            sim_time=self.sim_time,
+            step_count=self.step_count,
+            body_count=len(self.bodies),
+            selected_index=self.selected_planet_idx,
+            selected_speed=speed,
+            selected_radius=distance,
+        )
+
+    def snapshot(self, trail_points: int | None = None) -> SimulationSnapshot:
+        # UI получает "снимок" (неживые данные), чтобы не мутировать модель напрямую.
+        bodies = tuple(
+            BodySnapshot(
+                index=i,
+                name=body.name,
+                mass=body.mass,
+                radius_px=body.radius_px,
+                x=body.x,
+                y=body.y,
+                vx=body.vx,
+                vy=body.vy,
+                color=body.color,
+                trail=self._trail_snapshot(body, trail_points),
+                is_asteroid=body.is_asteroid,
+            )
+            for i, body in enumerate(self.bodies)
+        )
+        render = RenderOptions(
+            show_grid=self.render_options.show_grid,
+            show_trails=self.render_options.show_trails,
+            show_theory=self.render_options.show_theory,
+            show_labels=self.render_options.show_labels,
+            clean_ui=self.render_options.clean_ui,
+            cinematic_mode=self.render_options.cinematic_mode,
+            follow_selected=self.render_options.follow_selected,
+            show_sparklines=self.render_options.show_sparklines,
+            label_zoom_threshold=self.render_options.label_zoom_threshold,
+            background_variant=self.render_options.background_variant,
+            trail_alpha=self.render_options.trail_alpha,
+            zoom=self.render_options.zoom,
+        )
+        return SimulationSnapshot(
+            bodies=bodies,
+            selected_index=self.selected_planet_idx,
+            num_planets=self.num_planets,
+            g=self.g,
+            only_sun=self.only_sun,
+            paused=self.paused,
+            time_scale=self.time_scale,
+            render_options=render,
+            camera_mode=self.camera_mode,
+            follow_target_index=self.follow_target_index,
+            active_preset=self.active_preset,
+            asteroid_belt_enabled=self.asteroid_belt_enabled,
+            asteroid_belt_count=self.asteroid_belt_count,
+        )
+
+    def _trail_snapshot(self, body: Body, trail_points: int | None) -> tuple[tuple[float, float], ...]:
+        if not body.trail:
+            return ()
+        if trail_points is None:
+            return tuple(body.trail)
+        cap = max(24, int(trail_points))
+        if body.is_asteroid:
+            # Для астероидов ограничиваем хвост сильнее: их много и они мелкие.
+            cap = min(cap // 4, 96)
+        if len(body.trail) <= cap:
+            return tuple(body.trail)
+        return tuple(list(body.trail)[-cap:])
+
+    def _create_default_system(self, n_planets: int) -> None:
+        # Если тел несколько, радиусы раскладываются от центра к внешней орбите.
+        seeds = tuple(
+            BodySeed(name=self._body_name(i + 1), radius=200.0 if n_planets == 1 else 120.0 + 200.0 * i / max(1, n_planets - 1), angle_deg=(360.0 * i / n_planets))
+            for i in range(n_planets)
+        )
+        self._apply_seeded_system(seeds)
+
+    def _apply_seeded_system(self, seeds: tuple[BodySeed, ...]) -> None:
+        # Полная пересборка сцены: Солнце + планеты (+ астероиды по режиму).
+        self._current_seeds = tuple(seeds)
+        self.num_planets = len(seeds)
+        self.selected_planet_idx = 1 if self.num_planets else 0
+        self.step_count = 0
+        self.sim_time = 0.0
+        self.bodies = []
+
+        sun = Body(
+            name=self.BODY_NAMES[0],
+            mass=self.config.sun_mass,
+            radius_px=self.config.sun_radius_px,
+            x=0.0,
+            y=0.0,
+            vx=0.0,
+            vy=0.0,
+            color=(255, 213, 94),
+            trail=deque(maxlen=self.config.trail_len),
+        )
+        self.bodies.append(sun)
+
+        for index, seed in enumerate(seeds, start=1):
+            angle = math.radians(seed.angle_deg)
+            radius = seed.radius
+            x = radius * math.cos(angle)
+            y = radius * math.sin(angle)
+            # Базовая орбитальная скорость в учебных единицах.
+            orbital_speed = math.sqrt(max(0.0, self.g * self._simulation_mass(self.config.sun_mass) / max(radius, 1e-9)))
+            tangential_angle = angle + math.pi / 2 + math.radians(seed.angle_velocity_bias_deg)
+
+            # Касательная скорость + небольшой радиальный сдвиг для "живых" пресетов.
+            vx = orbital_speed * seed.speed_scale * math.cos(tangential_angle) + seed.radial_bias * math.cos(angle)
+            vy = orbital_speed * seed.speed_scale * math.sin(tangential_angle) + seed.radial_bias * math.sin(angle)
+            color = seed.color or self._planet_color(index - 1)
+            self.bodies.append(
+                Body(
+                    name=seed.name,
+                    mass=self._body_mass(seed.name),
+                    radius_px=self.config.planet_radius_px,
+                    x=x,
+                    y=y,
+                    vx=vx,
+                    vy=vy,
+                    color=color,
+                    trail=deque(maxlen=self.config.trail_len),
+                    is_asteroid=False,
+                )
+            )
+
+        if self.asteroid_belt_enabled:
+            self._append_asteroid_belt()
+
+        self._reset_histories()
+        self.advance_metrics_history()
+
+    def _append_asteroid_belt(self) -> None:
+        # Фиксированный seed => воспроизводимая сцена при одинаковых параметрах.
+        rng = random.Random(17)
+        belt_inner, belt_outer = self._asteroid_belt_range()
+        for asteroid_index in range(self.asteroid_belt_count):
+            radius = rng.uniform(belt_inner, belt_outer)
+            angle = rng.uniform(0.0, math.tau)
+            x = radius * math.cos(angle)
+            y = radius * math.sin(angle)
+            orbital_speed = math.sqrt(max(0.0, self.g * self._simulation_mass(self.config.sun_mass) / max(radius, 1e-9)))
+            tangential_angle = angle + math.pi / 2 + rng.uniform(-0.08, 0.08)
+            speed_scale = rng.uniform(0.96, 1.05)
+            vx = orbital_speed * speed_scale * math.cos(tangential_angle)
+            vy = orbital_speed * speed_scale * math.sin(tangential_angle)
+            color_shift = 150 + (asteroid_index % 3) * 18
+            self.bodies.append(
+                Body(
+                    name=f"Астероид {asteroid_index + 1}",
+                    mass=self.ASTEROID_MASS_EARTH,
+                    radius_px=2,
+                    x=x,
+                    y=y,
+                    vx=vx,
+                    vy=vy,
+                    color=(color_shift, color_shift, 170),
+                    trail=deque(maxlen=64),
+                    is_asteroid=True,
+                )
+            )
+
+    def _asteroid_belt_range(self) -> tuple[float, float]:
+        if self._asteroid_belt_range_override is not None:
+            return self._asteroid_belt_range_override
+        radii = sorted(
+            math.hypot(body.x, body.y)
+            for body in self.bodies[1:]
+            if not body.is_asteroid
+        )
+        if len(radii) >= 2:
+            # Пытаемся найти самый большой зазор между соседними орбитами
+            # и разместить пояс именно там (нагляднее для урока).
+            left, right, gap = max(
+                (
+                    (radii[index], radii[index + 1], radii[index + 1] - radii[index])
+                    for index in range(len(radii) - 1)
+                ),
+                key=lambda item: (item[2], item[0]),
+            )
+            if gap >= 55.0:
+                center = (left + right) * 0.5
+                half_width = max(12.0, gap * 0.16)
+                return center - half_width, center + half_width
+
+        outermost = radii[-1] if radii else 220.0
+        inner = outermost * 1.12
+        outer = outermost * 1.22
+        return inner, outer
+
+    def _reset_histories(self) -> None:
+        self._distance_history = {
+            index: deque(maxlen=self.config.history_len) for index in range(1, self.num_planets + 1)
+        }
+        self._speed_history = {
+            index: deque(maxlen=self.config.history_len) for index in range(1, self.num_planets + 1)
+        }
+
+    def _build_presets(self) -> dict[str, PresetDefinition]:
+        # Базовый набор визуальных флагов для "демо" режима и "кино" режима.
+        demo_defaults = RenderOptions(
+            show_grid=True,
+            show_trails=True,
+            show_theory=False,
+            show_labels=True,
+            show_sparklines=True,
+            label_zoom_threshold=0.65,
+        )
+        cinematic_defaults = RenderOptions(
+            show_grid=False,
+            show_trails=True,
+            show_theory=False,
+            show_labels=True,
+            cinematic_mode=True,
+            follow_selected=True,
+            show_sparklines=True,
+            label_zoom_threshold=0.75,
+        )
+        presets = [
+            PresetDefinition(
+                id="single-orbit",
+                label="Одиночная орбита",
+                description="Чистая демонстрация одной стабильной орбиты.",
+                planet_count=1,
+                initial_state=(BodySeed(name="Меркурий", radius=220.0, angle_deg=25.0),),
+                selected_index=1,
+                camera_mode="follow_selected",
+                render_defaults=cinematic_defaults,
+                gravity=1.0,
+            ),
+            PresetDefinition(
+                id="three-orbits",
+                label="Три орбиты",
+                description="Базовый showcase трёх планет на разных радиусах.",
+                planet_count=3,
+                initial_state=(
+                    BodySeed(name="Меркурий", radius=120.0, angle_deg=15.0),
+                    BodySeed(name="Венера", radius=220.0, angle_deg=130.0),
+                    BodySeed(name="Земля", radius=320.0, angle_deg=240.0),
+                ),
+                selected_index=2,
+                camera_mode="manual",
+                render_defaults=demo_defaults,
+                gravity=1.0,
+            ),
+            PresetDefinition(
+                id="solar-system",
+                label="Солнечная система",
+                description="Шесть планет и плотный пояс астероидов между Марсом и Юпитером.",
+                planet_count=6,
+                initial_state=(
+                    BodySeed(name="Меркурий", radius=110.0, angle_deg=8.0, speed_scale=1.03),
+                    BodySeed(name="Венера", radius=160.0, angle_deg=62.0, speed_scale=1.01),
+                    BodySeed(name="Земля", radius=220.0, angle_deg=132.0, speed_scale=1.00),
+                    BodySeed(name="Марс", radius=290.0, angle_deg=210.0, speed_scale=0.98),
+                    BodySeed(name="Юпитер", radius=470.0, angle_deg=285.0, speed_scale=1.00),
+                    BodySeed(name="Сатурн", radius=620.0, angle_deg=338.0, speed_scale=0.97),
+                ),
+                selected_index=3,
+                camera_mode="auto_frame",
+                render_defaults=demo_defaults,
+                gravity=1.0,
+                asteroid_belt_enabled=True,
+                asteroid_belt_count=120,
+                asteroid_belt_inner_radius=340.0,
+                asteroid_belt_outer_radius=410.0,
+            ),
+            PresetDefinition(
+                id="planet-interactions",
+                label="Влияние планет",
+                description="Тяжёлые планеты на близких орбитах для сравнения режима Солнце / все тела.",
+                planet_count=4,
+                initial_state=(
+                    BodySeed(name="Юпитер I", radius=180.0, angle_deg=0.0, speed_scale=1.00, color=(255, 117, 156)),
+                    BodySeed(name="Юпитер II", radius=192.0, angle_deg=4.0, speed_scale=0.98, radial_bias=-0.10, color=(196, 222, 126)),
+                    BodySeed(name="Сатурн", radius=290.0, angle_deg=208.0, speed_scale=1.01),
+                    BodySeed(name="Земля", radius=360.0, angle_deg=302.0, speed_scale=0.99),
+                ),
+                selected_index=1,
+                camera_mode="auto_frame",
+                render_defaults=demo_defaults,
+                gravity=1.0,
+            ),
+            PresetDefinition(
+                id="chaos",
+                label="Хаос",
+                description="Небольшие возмущения скорости для более живой сцены.",
+                planet_count=5,
+                initial_state=(
+                    BodySeed(name="Меркурий", radius=120.0, angle_deg=0.0, speed_scale=1.15),
+                    BodySeed(name="Венера", radius=170.0, angle_deg=72.0, speed_scale=0.92),
+                    BodySeed(name="Земля", radius=220.0, angle_deg=144.0, speed_scale=1.08),
+                    BodySeed(name="Марс", radius=270.0, angle_deg=216.0, speed_scale=0.89),
+                    BodySeed(name="Юпитер", radius=320.0, angle_deg=288.0, speed_scale=1.04),
+                ),
+                selected_index=3,
+                camera_mode="manual",
+                render_defaults=demo_defaults,
+                gravity=1.0,
+            ),
+            PresetDefinition(
+                id="close-approach",
+                label="Сближение",
+                description="Близкий пролёт с подчёркнутой динамикой.",
+                planet_count=3,
+                initial_state=(
+                    BodySeed(name="Меркурий", radius=140.0, angle_deg=18.0, speed_scale=1.18),
+                    BodySeed(name="Венера", radius=190.0, angle_deg=40.0, speed_scale=0.86, radial_bias=-0.6),
+                    BodySeed(name="Земля", radius=310.0, angle_deg=240.0, speed_scale=1.03),
+                ),
+                selected_index=2,
+                camera_mode="follow_selected",
+                render_defaults=cinematic_defaults,
+                gravity=1.0,
+            ),
+            PresetDefinition(
+                id="burst",
+                label="Резкое ускорение",
+                description="Одна планета получает заметный запас скорости.",
+                planet_count=3,
+                initial_state=(
+                    BodySeed(name="Меркурий", radius=130.0, angle_deg=20.0),
+                    BodySeed(name="Венера", radius=220.0, angle_deg=130.0, speed_scale=1.35),
+                    BodySeed(name="Земля", radius=310.0, angle_deg=250.0),
+                ),
+                selected_index=2,
+                camera_mode="follow_selected",
+                render_defaults=cinematic_defaults,
+                gravity=1.0,
+            ),
+            PresetDefinition(
+                id="near-escape",
+                label="Почти вылет",
+                description="Почти гиперболическая траектория.",
+                planet_count=2,
+                initial_state=(
+                    BodySeed(name="Меркурий", radius=140.0, angle_deg=0.0, speed_scale=1.48),
+                    BodySeed(name="Венера", radius=280.0, angle_deg=185.0, speed_scale=1.02),
+                ),
+                selected_index=1,
+                camera_mode="follow_selected",
+                render_defaults=cinematic_defaults,
+                gravity=1.0,
+            ),
+            PresetDefinition(
+                id="spiral-in",
+                label="Спираль к Солнцу",
+                description="Недостаток скорости даёт падение на более узкую траекторию.",
+                planet_count=3,
+                initial_state=(
+                    BodySeed(name="Меркурий", radius=120.0, angle_deg=30.0, speed_scale=0.82),
+                    BodySeed(name="Венера", radius=210.0, angle_deg=140.0, speed_scale=0.94),
+                    BodySeed(name="Земля", radius=300.0, angle_deg=255.0),
+                ),
+                selected_index=1,
+                camera_mode="follow_selected",
+                render_defaults=cinematic_defaults,
+                gravity=1.0,
+            ),
+            PresetDefinition(
+                id="gravity-showcase",
+                label="Показ влияния G",
+                description="Повышенное G делает траектории плотнее и динамичнее.",
+                planet_count=4,
+                initial_state=(
+                    BodySeed(name="Меркурий", radius=120.0, angle_deg=15.0),
+                    BodySeed(name="Венера", radius=180.0, angle_deg=95.0),
+                    BodySeed(name="Земля", radius=250.0, angle_deg=190.0),
+                    BodySeed(name="Марс", radius=320.0, angle_deg=280.0),
+                ),
+                selected_index=3,
+                camera_mode="auto_frame",
+                render_defaults=demo_defaults,
+                gravity=1.6,
+            ),
+            PresetDefinition(
+                id="binary-showcase",
+                label="Двойная дуга",
+                description="Две внутренние орбиты для компактного и эффектного кадра.",
+                planet_count=2,
+                initial_state=(
+                    BodySeed(name="Меркурий", radius=150.0, angle_deg=0.0, speed_scale=1.12),
+                    BodySeed(name="Венера", radius=165.0, angle_deg=180.0, speed_scale=0.96),
+                ),
+                selected_index=1,
+                camera_mode="auto_frame",
+                render_defaults=demo_defaults,
+                gravity=1.0,
+            ),
+            PresetDefinition(
+                id="slingshot",
+                label="Гравитационный манёвр",
+                description="Внешняя орбита получает дополнительный импульс и проходит близко к центру.",
+                planet_count=4,
+                initial_state=(
+                    BodySeed(name="Меркурий", radius=120.0, angle_deg=0.0),
+                    BodySeed(name="Венера", radius=180.0, angle_deg=75.0),
+                    BodySeed(name="Земля", radius=240.0, angle_deg=160.0, speed_scale=1.2),
+                    BodySeed(name="Марс", radius=320.0, angle_deg=250.0, speed_scale=0.92),
+                ),
+                selected_index=3,
+                camera_mode="follow_selected",
+                render_defaults=cinematic_defaults,
+                gravity=1.0,
+            ),
+        ]
+        return {preset.id: preset for preset in presets}
+
+    def _planet_color(self, index: int) -> ColorRGB:
+        palette = [
+            (107, 195, 255),
+            (148, 158, 255),
+            (109, 229, 186),
+            (246, 156, 105),
+            (255, 117, 156),
+            (196, 222, 126),
+            (130, 202, 255),
+            (255, 195, 110),
+            (186, 135, 255),
+        ]
+        return palette[index % len(palette)]
+
+    def _body_name(self, index: int) -> str:
+        if 0 <= index < len(self.BODY_NAMES):
+            return self.BODY_NAMES[index]
+        return f"Планета {index}"
+
+    def _body_mass(self, name: str) -> float:
+        return self.BODY_MASSES_EARTH.get(name, self.config.planet_mass)
+
+    def _simulation_mass(self, mass_earth: float) -> float:
+        return mass_earth * self.config.mass_to_sim_units
+
+    def _accel_from_to(
+        self,
+        xi: float,
+        yi: float,
+        xj: float,
+        yj: float,
+        mass_j: float,
+    ) -> tuple[float, float]:
+        dx = xj - xi
+        dy = yj - yi
+        # Softening добавляет "смягчение" вблизи нулевой дистанции, чтобы не было взрывных ускорений.
+        r2 = dx * dx + dy * dy + self.config.softening * self.config.softening
+        inv_r = 1.0 / math.sqrt(r2)
+        inv_r3 = inv_r * inv_r * inv_r
+        scaled_mass = self._simulation_mass(mass_j)
+        ax = self.g * scaled_mass * dx * inv_r3
+        ay = self.g * scaled_mass * dy * inv_r3
+        return ax, ay
+
+```
+
+---
+
+## Файл: `src/gravitylab/ui/__init__.py`
+
+**Назначение:** Публичный экспорт UI-компонентов приложения.
+
+```python
+from .canvas import SimulationCanvas
+from .control_panel import ControlPanel
+from .bottom_strip import BottomStrip
+from .inspector_panel import InspectorPanel
+from .help_dialog import HelpDialog
+from .preset_browser import PresetBrowser
+from .top_bar import TopBar
+
+__all__ = [
+    "BottomStrip",
+    "ControlPanel",
+    "HelpDialog",
+    "InspectorPanel",
+    "PresetBrowser",
+    "SimulationCanvas",
+    "TopBar",
+]
+
+```
+
+---
+
+## Файл: `src/gravitylab/ui/top_bar.py`
+
+**Назначение:** Верхняя панель быстрых действий и индикаторов состояния сцены.
+
+```python
+from __future__ import annotations
+
+from PyQt6.QtCore import pyqtSignal
+from PyQt6.QtWidgets import (
+    QFrame,
+    QHBoxLayout,
+    QLabel,
+    QPushButton,
+    QWidget,
+)
+
+from ..sim.model import PresetDefinition, SimulationSnapshot, SimulationStats
+
+
+class TopBar(QWidget):
+    play_pause_requested = pyqtSignal()
+    reset_requested = pyqtSignal()
+    fit_requested = pyqtSignal()
+    screenshot_requested = pyqtSignal()
+    help_requested = pyqtSignal()
+    clean_ui_toggled = pyqtSignal(bool)
+    cinematic_toggled = pyqtSignal(bool)
+    theme_toggled = pyqtSignal(bool)
+    next_body_requested = pyqtSignal()
+
+    def __init__(self, parent: QWidget | None = None) -> None:
+        super().__init__(parent)
+        self._compact_mode = False
+        self._short_mode = False
+        shell = QFrame()
+        shell.setObjectName("topBar")
+
+        self._shell_layout = QHBoxLayout(shell)
+        self._shell_layout.setContentsMargins(16, 10, 16, 10)
+        self._shell_layout.setSpacing(10)
+
+        self.scene_label = QLabel("GravityLab")
+        self.scene_label.setObjectName("overlayTitle")
+        self.state_label = QLabel()
+        self.state_label.setObjectName("overlayPill")
+        self.zoom_label = QLabel()
+        self.zoom_label.setObjectName("overlayPill")
+        self.gravity_label = QLabel()
+        self.gravity_label.setObjectName("overlayPill")
+
+        self.next_body_button = QPushButton("Следующее тело")
+        self.play_pause_button = QPushButton("Пауза")
+        self.play_pause_button.setObjectName("accentButton")
+        self.reset_button = QPushButton("Сброс")
+        self.fit_button = QPushButton("Подогнать")
+        self.screenshot_button = QPushButton("Снимок")
+        self.help_button = QPushButton("Справка")
+        self.theme_button = QPushButton("День")
+        self.theme_button.setCheckable(True)
+        self.clean_ui_button = QPushButton("Чистый UI")
+        self.clean_ui_button.setCheckable(True)
+        self.cinematic_button = QPushButton("Кино-камера")
+        self.cinematic_button.setCheckable(True)
+
+        self._shell_layout.addWidget(self.scene_label)
+        self._shell_layout.addStretch(1)
+        self._shell_layout.addWidget(self.state_label)
+        self._shell_layout.addWidget(self.zoom_label)
+        self._shell_layout.addWidget(self.gravity_label)
+        self._shell_layout.addWidget(self.next_body_button)
+        self._shell_layout.addWidget(self.play_pause_button)
+        self._shell_layout.addWidget(self.reset_button)
+        self._shell_layout.addWidget(self.fit_button)
+        self._shell_layout.addWidget(self.screenshot_button)
+        self._shell_layout.addWidget(self.help_button)
+        self._shell_layout.addWidget(self.theme_button)
+        self._shell_layout.addWidget(self.clean_ui_button)
+        self._shell_layout.addWidget(self.cinematic_button)
+
+        root = QHBoxLayout(self)
+        root.setContentsMargins(0, 0, 0, 0)
+        root.addWidget(shell)
+
+        self._apply_tooltips()
+        self.play_pause_button.clicked.connect(self.play_pause_requested.emit)
+        self.reset_button.clicked.connect(self.reset_requested.emit)
+        self.fit_button.clicked.connect(self.fit_requested.emit)
+        self.screenshot_button.clicked.connect(self.screenshot_requested.emit)
+        self.help_button.clicked.connect(self.help_requested.emit)
+        self.next_body_button.clicked.connect(self.next_body_requested.emit)
+        self.theme_button.toggled.connect(self._emit_theme_toggled)
+        self.clean_ui_button.toggled.connect(self.clean_ui_toggled.emit)
+        self.cinematic_button.toggled.connect(self.cinematic_toggled.emit)
+
+    def set_compact_mode(self, compact: bool) -> None:
+        self._compact_mode = compact
+        self.next_body_button.setVisible(not compact)
+        for button, compact_text, full_text in (
+            (self.fit_button, "Fit", "Подогнать"),
+            (self.screenshot_button, "PNG", "Снимок"),
+            (self.help_button, "?", "Справка"),
+            (self.clean_ui_button, "UI", "Чистый UI"),
+            (self.cinematic_button, "Кино", "Кино-камера"),
+        ):
+            button.setText(compact_text if compact else full_text)
+        self.scene_label.setMaximumWidth(220 if compact else 420)
+        self.state_label.setVisible(not compact)
+        self._shell_layout.setContentsMargins(12 if compact else 16, 6 if compact else 10, 12 if compact else 16, 6 if compact else 10)
+        self._shell_layout.setSpacing(8 if compact else 10)
+        self.set_theme_mode(self.theme_button.isChecked())
+
+    def set_short_mode(self, short: bool) -> None:
+        self._short_mode = short
+        self.reset_button.setVisible(not short)
+        self.screenshot_button.setVisible(not short)
+        self.help_button.setVisible(not short)
+        self.scene_label.setVisible(not short)
+
+    def set_presets(self, presets: tuple[PresetDefinition, ...]) -> None:
+        _ = presets
+
+    def update_state(self, snapshot: SimulationSnapshot, stats: SimulationStats) -> None:
+        _ = stats
+        self.scene_label.setText(snapshot.active_preset or "Свободная сцена")
+        self.state_label.setText("Пауза" if snapshot.paused else "В работе")
+        self.zoom_label.setText(
+            f"{'Z' if self._compact_mode else 'Масштаб'} {snapshot.render_options.zoom:.2f}x"
+        )
+        self.gravity_label.setText(f"G {snapshot.g:.2f}")
+        self.play_pause_button.setText("Старт" if snapshot.paused else "Пауза")
+        self.clean_ui_button.blockSignals(True)
+        self.clean_ui_button.setChecked(snapshot.render_options.clean_ui)
+        self.clean_ui_button.blockSignals(False)
+        self.cinematic_button.blockSignals(True)
+        self.cinematic_button.setChecked(snapshot.render_options.cinematic_mode)
+        self.cinematic_button.blockSignals(False)
+
+    def set_theme_mode(self, night_enabled: bool) -> None:
+        self.theme_button.blockSignals(True)
+        self.theme_button.setChecked(night_enabled)
+        self.theme_button.setText("Тема: Ночь" if night_enabled else "Тема: День")
+        self.theme_button.blockSignals(False)
+        if self._compact_mode:
+            self.theme_button.setText("Тема")
+
+    def _emit_theme_toggled(self, checked: bool) -> None:
+        self.set_theme_mode(checked)
+        self.theme_toggled.emit(checked)
+
+    def _apply_tooltips(self) -> None:
+        self.scene_label.setToolTip("Имя текущего пресета или свободной сцены.")
+        self.state_label.setToolTip("Текущее состояние симуляции: идёт расчёт или включена пауза.")
+        self.zoom_label.setToolTip("Текущий масштаб сцены.")
+        self.gravity_label.setToolTip("Текущее значение силы притяжения G.")
+        self.next_body_button.setToolTip("Переключает выбор на следующее основное тело.")
+        self.play_pause_button.setToolTip("Запускает или ставит симуляцию на паузу.")
+        self.reset_button.setToolTip("Сбрасывает сцену к текущему числу планет или активному пресету.")
+        self.fit_button.setToolTip("Подгоняет камеру так, чтобы вся система поместилась в кадр.")
+        self.screenshot_button.setToolTip("Сохраняет текущий кадр сцены в PNG.")
+        self.help_button.setToolTip("Открывает подробную справку по программе, физике и пресетам.")
+        self.theme_button.setToolTip("Переключает дневную и ночную тему интерфейса.")
+        self.clean_ui_button.setToolTip("Скрывает боковые панели и оставляет только сцену с overlays.")
+        self.cinematic_button.setToolTip("Включает плавное следование камеры за выбранным телом.")
+
+```
+
+---
+
+## Файл: `src/gravitylab/ui/bottom_strip.py`
+
+**Назначение:** Нижняя transport-панель управления временем и состоянием симуляции.
+
+```python
+from __future__ import annotations
+
+from PyQt6.QtCore import Qt, pyqtSignal
+from PyQt6.QtWidgets import (
+    QComboBox,
+    QFrame,
+    QHBoxLayout,
+    QLabel,
+    QPushButton,
+    QWidget,
+)
+
+from ..sim.model import SimulationSnapshot, SimulationStats
+
+
+class BottomStrip(QWidget):
+    play_pause_requested = pyqtSignal()
+    step_requested = pyqtSignal()
+    reset_requested = pyqtSignal()
+    time_scale_changed = pyqtSignal(float)
+
+    def __init__(self, parent: QWidget | None = None) -> None:
+        super().__init__(parent)
+        self._compact_mode = False
+        self._short_mode = False
+        shell = QFrame()
+        shell.setObjectName("bottomStrip")
+        self._shell_layout = QHBoxLayout(shell)
+        self._shell_layout.setContentsMargins(16, 10, 16, 10)
+        self._shell_layout.setSpacing(12)
+
+        self.play_pause_button = QPushButton("Пауза")
+        self.play_pause_button.setObjectName("accentButton")
+        self.step_button = QPushButton("Шаг")
+        self.reset_button = QPushButton("Сброс")
+        self.time_scale_combo = QComboBox()
+        for value in (0.5, 1.0, 2.0, 3.0, 4.0, 6.0, 10.0, 16.0, 24.0):
+            self.time_scale_combo.addItem(f"{value:.2f}x", value)
+
+        self.sim_time_label = QLabel()
+        self.selected_label = QLabel()
+        self.distance_label = QLabel()
+        self.preset_label = QLabel()
+        for widget in (self.sim_time_label, self.selected_label, self.distance_label, self.preset_label):
+            widget.setObjectName("overlayPill")
+
+        self._shell_layout.addWidget(self.play_pause_button)
+        self._shell_layout.addWidget(self.step_button)
+        self._shell_layout.addWidget(self.reset_button)
+        self._shell_layout.addWidget(self.time_scale_combo)
+        self._shell_layout.addStretch(1)
+        self._shell_layout.addWidget(self.sim_time_label)
+        self._shell_layout.addWidget(self.selected_label)
+        self._shell_layout.addWidget(self.distance_label)
+        self._shell_layout.addWidget(self.preset_label)
+
+        root = QHBoxLayout(self)
+        root.setContentsMargins(0, 0, 0, 0)
+        root.addWidget(shell)
+
+        self._apply_tooltips()
+        self.play_pause_button.clicked.connect(self.play_pause_requested.emit)
+        self.step_button.clicked.connect(self.step_requested.emit)
+        self.reset_button.clicked.connect(self.reset_requested.emit)
+        self.time_scale_combo.currentIndexChanged.connect(self._emit_time_scale_changed)
+
+    def set_compact_mode(self, compact: bool) -> None:
+        self._compact_mode = compact
+        self.step_button.setVisible(not compact)
+        self.reset_button.setVisible(not compact)
+        self.preset_label.setVisible(not compact)
+        self.selected_label.setVisible(not compact)
+        self.distance_label.setVisible(not compact)
+        self.time_scale_combo.setMinimumWidth(90 if compact else 120)
+        self.play_pause_button.setText("Старт" if compact else self.play_pause_button.text())
+        self._shell_layout.setContentsMargins(12 if compact else 16, 6 if compact else 10, 12 if compact else 16, 6 if compact else 10)
+        self._shell_layout.setSpacing(8 if compact else 12)
+
+    def set_short_mode(self, short: bool) -> None:
+        self._short_mode = short
+        self.step_button.setVisible(not short and not self._compact_mode)
+        self.reset_button.setVisible(not short and not self._compact_mode)
+        self.selected_label.setVisible(not short and not self._compact_mode)
+        self.distance_label.setVisible(not short and not self._compact_mode)
+        self.preset_label.setVisible(not short and not self._compact_mode)
+        self.sim_time_label.setVisible(True)
+
+    def update_state(self, snapshot: SimulationSnapshot, stats: SimulationStats) -> None:
+        selected = snapshot.bodies[snapshot.selected_index]
+        self.play_pause_button.setText("Старт" if snapshot.paused else "Пауза")
+
+        self.time_scale_combo.blockSignals(True)
+        if self.time_scale_combo.findData(snapshot.time_scale) < 0:
+            self.time_scale_combo.addItem(f"{snapshot.time_scale:.2f}x", snapshot.time_scale)
+        for index in range(self.time_scale_combo.count()):
+            if abs(float(self.time_scale_combo.itemData(index)) - snapshot.time_scale) < 1e-9:
+                self.time_scale_combo.setCurrentIndex(index)
+                break
+        self.time_scale_combo.blockSignals(False)
+
+        self.sim_time_label.setText(f"Время {stats.sim_time:.1f} c")
+        self.selected_label.setText(f"Тело {selected.name}")
+        self.distance_label.setText(f"Орбита {stats.selected_radius:.1f} ед.")
+        self.preset_label.setText(snapshot.active_preset or "Без пресета")
+
+    def _emit_time_scale_changed(self) -> None:
+        value = self.time_scale_combo.currentData()
+        if value is not None:
+            self.time_scale_changed.emit(float(value))
+
+    def _apply_tooltips(self) -> None:
+        self.play_pause_button.setToolTip("Запускает или ставит симуляцию на паузу.")
+        self.step_button.setToolTip("Выполняет один шаг расчёта, даже если включена пауза.")
+        self.reset_button.setToolTip("Сбрасывает текущую сцену.")
+        self.time_scale_combo.setToolTip("Выбор готового масштаба времени для ускорения или замедления симуляции.")
+        self.sim_time_label.setToolTip("Сколько симуляционного времени прошло с начала сцены.")
+        self.selected_label.setToolTip("Текущее выбранное тело.")
+        self.distance_label.setToolTip("Расстояние выбранного тела до Солнца.")
+        self.preset_label.setToolTip("Название активного пресета.")
+
+```
+
+---
+
+## Файл: `src/gravitylab/ui/control_panel.py`
+
+**Назначение:** Левая панель настроек сцены: параметры, режимы и пресеты.
+
+```python
+from __future__ import annotations
+
+from PyQt6.QtCore import Qt, pyqtSignal
+from PyQt6.QtWidgets import QCheckBox, QFrame, QLabel, QScrollArea, QSlider, QVBoxLayout, QWidget
+
+from ..sim.model import PresetDefinition, RenderOptions, SimulationConfig, SimulationSnapshot, SimulationStats
+from .preset_browser import PresetBrowser
+
+
+class ControlPanel(QWidget):
+    num_planets_changed = pyqtSignal(int)
+    gravity_changed = pyqtSignal(float)
+    time_scale_changed = pyqtSignal(float)
+    asteroid_density_changed = pyqtSignal(int)
+    mode_toggled = pyqtSignal(str, bool)
+    preset_requested = pyqtSignal(str)
+    fit_requested = pyqtSignal()
+    reset_view_requested = pyqtSignal()
+    screenshot_requested = pyqtSignal()
+
+    def __init__(self, parent: QWidget | None = None) -> None:
+        super().__init__(parent)
+        self._compact_mode = False
+        self._short_mode = False
+        self.setMinimumWidth(220)
+        self.setMaximumWidth(280)
+
+        shell = QFrame()
+        shell.setObjectName("panelShell")
+        self._shell_layout = QVBoxLayout(shell)
+        self._shell_layout.setContentsMargins(14, 14, 14, 14)
+        self._shell_layout.setSpacing(12)
+
+        self.eyebrow = QLabel("Панель сцены")
+        self.eyebrow.setObjectName("eyebrow")
+        self.title_label = QLabel("Все настройки сцены")
+        self.title_label.setObjectName("sectionTitle")
+        self._shell_layout.addWidget(self.eyebrow)
+        self._shell_layout.addWidget(self.title_label)
+
+        self.settings_card = self._build_settings_card()
+        self._shell_layout.addWidget(self.settings_card)
+        self._shell_layout.addStretch(1)
+
+        self.scroll_area = QScrollArea()
+        self.scroll_area.setWidgetResizable(True)
+        self.scroll_area.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
+        self.scroll_area.setWidget(shell)
+
+        layout = QVBoxLayout(self)
+        layout.setContentsMargins(0, 0, 0, 0)
+        layout.addWidget(self.scroll_area)
+
+        self._apply_tooltips()
+        self._connect_signals()
+
+    def set_compact_mode(self, compact: bool) -> None:
+        self._compact_mode = compact
+        self.setMinimumWidth(188 if compact else 220)
+        self.setMaximumWidth(236 if compact else 280)
+        self._shell_layout.setContentsMargins(10 if compact else 14, 10 if compact else 14, 10 if compact else 14, 10 if compact else 14)
+        self._shell_layout.setSpacing(8 if compact else 12)
+        self._settings_layout.setContentsMargins(10 if compact else 14, 10 if compact else 14, 10 if compact else 14, 10 if compact else 14)
+        self._settings_layout.setSpacing(8 if compact else 10)
+
+    def set_short_mode(self, short: bool) -> None:
+        self._short_mode = short
+        self.eyebrow.setVisible(not short)
+        self.title_label.setVisible(not short)
+        self.preset_browser.description_label.setVisible(not short)
+
+    def set_presets(self, presets: tuple[PresetDefinition, ...], active_label: str | None = None) -> None:
+        self.preset_browser.set_presets(presets, active_label)
+
+    def update_state(
+        self,
+        snapshot: SimulationSnapshot,
+        stats: SimulationStats,
+        _config: SimulationConfig,
+        render_options: RenderOptions,
+    ) -> None:
+        self._set_slider(self.planet_slider, snapshot.num_planets)
+        self._set_slider(self.gravity_slider, int(round(snapshot.g * 100)))
+        self._set_slider(self.time_scale_slider, int(round(snapshot.time_scale * 100)))
+        self._set_slider(self.asteroid_density_slider, snapshot.asteroid_belt_count)
+        self.planet_value.setText(f"{snapshot.num_planets} тел")
+        self.gravity_value.setText(f"{snapshot.g:.2f}")
+        self.time_scale_value.setText(f"{snapshot.time_scale:.2f}x")
+        self.asteroid_density_value.setText(f"{snapshot.asteroid_belt_count} астероидов")
+        self.summary_label.setText(
+            "<b>Текущая сцена</b><br>"
+            f"{snapshot.active_preset or 'Свободная сцена'}<br><br>"
+            f"<b>Выбрано тело</b><br>{snapshot.bodies[snapshot.selected_index].name}<br><br>"
+            f"<b>FPS</b><br>{stats.fps:.1f}"
+        )
+
+        self._set_checkbox(self.trails_checkbox, render_options.show_trails)
+        self._set_checkbox(self.grid_checkbox, render_options.show_grid)
+        self._set_checkbox(self.labels_checkbox, render_options.show_labels)
+        self._set_checkbox(self.theory_checkbox, render_options.show_theory)
+        self._set_checkbox(self.only_sun_checkbox, snapshot.only_sun)
+        self._set_checkbox(self.asteroid_belt_checkbox, snapshot.asteroid_belt_enabled)
+
+    def _build_settings_card(self) -> QFrame:
+        card = QFrame()
+        card.setObjectName("metricCard")
+        self._settings_layout = QVBoxLayout(card)
+        self._settings_layout.setContentsMargins(14, 14, 14, 14)
+        self._settings_layout.setSpacing(10)
+
+        self.summary_label = QLabel()
+        self.summary_label.setObjectName("summaryBlock")
+        self.summary_label.setTextFormat(Qt.TextFormat.RichText)
+        self.summary_label.setWordWrap(True)
+        self._settings_layout.addWidget(self.summary_label)
+
+        self.planet_slider = self._slider(1, 9)
+        self.gravity_slider = self._slider(1, 1200)
+        self.time_scale_slider = self._slider(10, 2400)
+        self.asteroid_density_slider = self._slider(0, 240)
+        self.planet_value = QLabel()
+        self.gravity_value = QLabel()
+        self.time_scale_value = QLabel()
+        self.asteroid_density_value = QLabel()
+
+        for title, slider, value in (
+            ("Планеты", self.planet_slider, self.planet_value),
+            ("Гравитация G", self.gravity_slider, self.gravity_value),
+            ("Масштаб времени", self.time_scale_slider, self.time_scale_value),
+            ("Плотность пояса", self.asteroid_density_slider, self.asteroid_density_value),
+        ):
+            self._add_field(title, slider, value)
+
+        self._add_separator()
+
+        self.trails_checkbox = QCheckBox("Следы")
+        self.grid_checkbox = QCheckBox("Сетка")
+        self.labels_checkbox = QCheckBox("Подписи")
+        self.theory_checkbox = QCheckBox("Теория")
+        self.only_sun_checkbox = QCheckBox("Только притяжение Солнца")
+        self.asteroid_belt_checkbox = QCheckBox("Пояс астероидов")
+        for checkbox in (
+            self.trails_checkbox,
+            self.grid_checkbox,
+            self.labels_checkbox,
+            self.theory_checkbox,
+            self.only_sun_checkbox,
+            self.asteroid_belt_checkbox,
+        ):
+            self._settings_layout.addWidget(checkbox)
+
+        self._add_separator()
+
+        preset_label = QLabel("Пресеты")
+        preset_label.setObjectName("mutedText")
+        self.preset_browser = PresetBrowser()
+        self._settings_layout.addWidget(preset_label)
+        self._settings_layout.addWidget(self.preset_browser)
+        return card
+
+    def _add_field(self, title: str, slider: QSlider, value: QLabel) -> None:
+        label = QLabel(title)
+        label.setObjectName("mutedText")
+        self._settings_layout.addWidget(label)
+        self._settings_layout.addWidget(slider)
+        self._settings_layout.addWidget(value)
+
+    def _add_separator(self) -> None:
+        line = QFrame()
+        line.setFrameShape(QFrame.Shape.HLine)
+        line.setObjectName("panelDivider")
+        self._settings_layout.addWidget(line)
+
+    def _apply_tooltips(self) -> None:
+        self.planet_slider.setToolTip("Меняет число основных планет в сцене от 1 до 9.")
+        self.gravity_slider.setToolTip("Условная сила притяжения G. Больше значение — сильнее гравитация.")
+        self.time_scale_slider.setToolTip("Ускоряет или замедляет ход симуляции без изменения структуры сцены.")
+        self.asteroid_density_slider.setToolTip("Определяет, сколько астероидов будет в поясе при включённом режиме.")
+
+        self.trails_checkbox.setToolTip("Показывает хвосты траекторий, чтобы было видно форму орбит.")
+        self.grid_checkbox.setToolTip("Включает вспомогательную сетку на сцене.")
+        self.labels_checkbox.setToolTip("Показывает подписи планет рядом с телами на сцене.")
+        self.theory_checkbox.setToolTip("Показывает компактный блок с формулами и пояснениями справа.")
+        self.only_sun_checkbox.setToolTip(
+            "Тела притягиваются только к Солнцу. Взаимное влияние планет и астероидов друг на друга отключается."
+        )
+        self.asteroid_belt_checkbox.setToolTip(
+            "Добавляет пояс астероидов. По умолчанию он размещается внутри системы, а в пресете «Солнечная система» — между Марсом и Юпитером."
+        )
+
+        self.preset_browser.preset_combo.setToolTip("Выбор готового сценария сцены.")
+        self.preset_browser.apply_button.setToolTip("Применяет выбранный пресет с его стартовыми параметрами.")
+
+    def _connect_signals(self) -> None:
+        self.planet_slider.valueChanged.connect(self.num_planets_changed.emit)
+        self.gravity_slider.valueChanged.connect(lambda value: self.gravity_changed.emit(value / 100.0))
+        self.time_scale_slider.valueChanged.connect(lambda value: self.time_scale_changed.emit(value / 100.0))
+        self.asteroid_density_slider.valueChanged.connect(self.asteroid_density_changed.emit)
+        self.trails_checkbox.toggled.connect(lambda checked: self.mode_toggled.emit("trails", checked))
+        self.grid_checkbox.toggled.connect(lambda checked: self.mode_toggled.emit("grid", checked))
+        self.labels_checkbox.toggled.connect(lambda checked: self.mode_toggled.emit("labels", checked))
+        self.theory_checkbox.toggled.connect(lambda checked: self.mode_toggled.emit("theory", checked))
+        self.only_sun_checkbox.toggled.connect(lambda checked: self.mode_toggled.emit("only_sun", checked))
+        self.asteroid_belt_checkbox.toggled.connect(lambda checked: self.mode_toggled.emit("asteroid_belt", checked))
+        self.preset_browser.preset_requested.connect(self.preset_requested.emit)
+
+    def _slider(self, minimum: int, maximum: int) -> QSlider:
+        slider = QSlider(Qt.Orientation.Horizontal)
+        slider.setRange(minimum, maximum)
+        return slider
+
+    def _set_slider(self, slider: QSlider, value: int) -> None:
+        slider.blockSignals(True)
+        slider.setValue(value)
+        slider.blockSignals(False)
+
+    def _set_checkbox(self, checkbox: QCheckBox, value: bool) -> None:
+        checkbox.blockSignals(True)
+        checkbox.setChecked(value)
+        checkbox.blockSignals(False)
+
+```
+
+---
+
+## Файл: `src/gravitylab/ui/inspector_panel.py`
+
+**Назначение:** Правая панель инспектора: данные выбранного тела, быстрые действия и мини-графики.
+
+```python
+from __future__ import annotations
+
+import math
+
+from PyQt6.QtCore import QPointF, Qt, pyqtSignal
+from PyQt6.QtGui import QColor, QPainter, QPen
+from PyQt6.QtWidgets import (
+    QCheckBox,
+    QFrame,
+    QHBoxLayout,
+    QLabel,
+    QPushButton,
+    QScrollArea,
+    QSizePolicy,
+    QVBoxLayout,
+    QWidget,
+)
+
+from ..sim.model import BodySeriesSnapshot, SimulationSnapshot, SimulationStats
+from ..theme import current_palette, qcolor
+
+
+class Sparkline(QWidget):
+    def __init__(self, parent: QWidget | None = None) -> None:
+        super().__init__(parent)
+        self._values: tuple[float, ...] = ()
+        self._color = QColor("#6cbcff")
+        self.setMinimumHeight(54)
+
+    def set_series(self, values: tuple[float, ...], color: QColor | None = None) -> None:
+        self._values = values
+        if color is not None:
+            self._color = color
+        self.update()
+
+    def paintEvent(self, _event) -> None:
+        painter = QPainter(self)
+        painter.setRenderHint(QPainter.RenderHint.Antialiasing, True)
+        painter.fillRect(self.rect(), qcolor(current_palette().spark_bg))
+        if len(self._values) < 2:
+            painter.end()
+            return
+
+        minimum = min(self._values)
+        maximum = max(self._values)
+        spread = maximum - minimum or 1.0
+        points = []
+        for index, value in enumerate(self._values):
+            x = 8 + (self.width() - 16) * index / max(1, len(self._values) - 1)
+            y = 8 + (self.height() - 16) * (1.0 - (value - minimum) / spread)
+            points.append(QPointF(x, y))
+        painter.setPen(QPen(self._color, 2))
+        for index in range(1, len(points)):
+            painter.drawLine(points[index - 1], points[index])
+        painter.end()
+
+
+class InspectorPanel(QWidget):
+    center_selected_requested = pyqtSignal()
+    follow_selected_toggled = pyqtSignal(bool)
+    speed_scaled = pyqtSignal(float)
+    mass_scaled = pyqtSignal(float)
+
+    def __init__(self, parent: QWidget | None = None) -> None:
+        super().__init__(parent)
+        self._compact_mode = False
+        self._short_mode = False
+        self._show_theory = True
+        self._show_sparklines = True
+        self.setSizePolicy(QSizePolicy.Policy.Preferred, QSizePolicy.Policy.Expanding)
+
+        shell = QFrame()
+        shell.setObjectName("panelShell")
+        self._shell_layout = QVBoxLayout(shell)
+        self._shell_layout.setContentsMargins(10, 10, 10, 10)
+        self._shell_layout.setSpacing(10)
+
+        self.selected_card = self._metric_card("Выбранное тело")
+        self.selected_title = self.selected_card.layout().itemAt(0).widget()
+        self.selected_label = QLabel()
+        self.selected_label.setObjectName("dataBlock")
+        self.selected_label.setWordWrap(True)
+        self.selected_card.layout().addWidget(self.selected_label)
+        self._shell_layout.addWidget(self.selected_card)
+
+        self.actions_card = self._metric_card("Быстрые действия")
+        actions_layout = self.actions_card.layout()
+        first_row = QHBoxLayout()
+        self.center_button = QPushButton("Центрировать")
+        self.follow_checkbox = QCheckBox("Следовать")
+        first_row.addWidget(self.center_button)
+        first_row.addWidget(self.follow_checkbox)
+        second_row = QHBoxLayout()
+        self.slow_button = QPushButton("-10%")
+        self.fast_button = QPushButton("+10%")
+        second_row.addWidget(self.slow_button)
+        second_row.addWidget(self.fast_button)
+        third_row = QHBoxLayout()
+        self.mass_down_button = QPushButton("Масса -10%")
+        self.mass_up_button = QPushButton("Масса +10%")
+        third_row.addWidget(self.mass_down_button)
+        third_row.addWidget(self.mass_up_button)
+        actions_layout.addLayout(first_row)
+        actions_layout.addLayout(second_row)
+        actions_layout.addLayout(third_row)
+        self._shell_layout.addWidget(self.actions_card)
+
+        self.metrics_card = self._metric_card("Метрики")
+        self.metrics_label = QLabel()
+        self.metrics_label.setObjectName("dataBlock")
+        self.metrics_label.setWordWrap(True)
+        self.metrics_card.layout().addWidget(self.metrics_label)
+        self._shell_layout.addWidget(self.metrics_card)
+
+        self.sparklines_card = self._metric_card("История")
+        spark_layout = self.sparklines_card.layout()
+        self.distance_caption = QLabel("Расстояние")
+        self.distance_caption.setObjectName("mutedText")
+        self.distance_spark = Sparkline()
+        self.speed_caption = QLabel("Скорость")
+        self.speed_caption.setObjectName("mutedText")
+        self.speed_spark = Sparkline()
+        spark_layout.addWidget(self.distance_caption)
+        spark_layout.addWidget(self.distance_spark)
+        spark_layout.addWidget(self.speed_caption)
+        spark_layout.addWidget(self.speed_spark)
+        self._shell_layout.addWidget(self.sparklines_card)
+
+        self.theory_card = self._metric_card("Теория")
+        self.theory_label = QLabel(self._theory_text())
+        self.theory_label.setObjectName("mutedText")
+        self.theory_label.setWordWrap(True)
+        self.theory_card.layout().addWidget(self.theory_label)
+        self._shell_layout.addWidget(self.theory_card)
+        self._shell_layout.addStretch(1)
+
+        self.scroll_area = QScrollArea()
+        self.scroll_area.setWidgetResizable(True)
+        self.scroll_area.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
+        self.scroll_area.setWidget(shell)
+
+        layout = QVBoxLayout(self)
+        layout.setContentsMargins(0, 0, 0, 0)
+        layout.addWidget(self.scroll_area)
+
+        self._apply_tooltips()
+        self.center_button.clicked.connect(self.center_selected_requested.emit)
+        self.follow_checkbox.toggled.connect(self.follow_selected_toggled.emit)
+        self.slow_button.clicked.connect(lambda: self.speed_scaled.emit(0.9))
+        self.fast_button.clicked.connect(lambda: self.speed_scaled.emit(1.1))
+        self.mass_down_button.clicked.connect(lambda: self.mass_scaled.emit(0.9))
+        self.mass_up_button.clicked.connect(lambda: self.mass_scaled.emit(1.1))
+
+    def set_compact_mode(self, compact: bool) -> None:
+        self._compact_mode = compact
+        self.setMinimumWidth(206 if compact else 228)
+        self.setMaximumWidth(246 if compact else 278)
+        self._shell_layout.setContentsMargins(8 if compact else 10, 8 if compact else 10, 8 if compact else 10, 8 if compact else 10)
+        self._shell_layout.setSpacing(8 if compact else 10)
+        self._set_card_density(compact)
+        self._update_secondary_visibility()
+
+    def set_short_mode(self, short: bool) -> None:
+        self._short_mode = short
+        if short:
+            self.follow_checkbox.setText("")
+        else:
+            self.follow_checkbox.setText("Следовать")
+        self._update_secondary_visibility()
+
+    def update_state(
+        self,
+        snapshot: SimulationSnapshot,
+        stats: SimulationStats,
+        series: BodySeriesSnapshot,
+    ) -> None:
+        selected = snapshot.bodies[snapshot.selected_index]
+        speed = math.hypot(selected.vx, selected.vy)
+        distance = math.hypot(selected.x - snapshot.bodies[0].x, selected.y - snapshot.bodies[0].y)
+        angle = math.degrees(math.atan2(selected.y, selected.x))
+
+        self.selected_title.setText(f"{selected.name}")
+        self.selected_label.setText(
+            "\n".join(
+                [
+                    f"Индекс: {selected.index}",
+                    f"Координаты: ({selected.x:.1f}, {selected.y:.1f})",
+                    f"Масса: {self._format_mass(selected.mass)}",
+                    f"Скорость: {speed:.2f}",
+                    f"Радиус орбиты: {distance:.1f} ед.",
+                    f"Угол: {angle:.1f}°",
+                ]
+            )
+        )
+        self.metrics_label.setText(
+            "\n".join(
+                [
+                    f"FPS: {stats.fps:.1f}",
+                    f"G: {snapshot.g:.2f}",
+                    f"Время: {stats.sim_time:.2f} c",
+                    f"Камера: {self._camera_mode_label(snapshot.camera_mode)}",
+                    f"Пресет: {snapshot.active_preset or 'нет'}",
+                ]
+            )
+        )
+        self.follow_checkbox.blockSignals(True)
+        self.follow_checkbox.setChecked(snapshot.follow_target_index == selected.index)
+        self.follow_checkbox.blockSignals(False)
+        self._show_sparklines = snapshot.render_options.show_sparklines
+        self._show_theory = snapshot.render_options.show_theory
+        self.distance_spark.set_series(series.distance_history, QColor("#6cbcff"))
+        self.speed_spark.set_series(series.speed_history, QColor("#ffd36e"))
+        self._update_secondary_visibility()
+
+    def _metric_card(self, title: str) -> QFrame:
+        card = QFrame()
+        card.setObjectName("metricCard")
+        card.setSizePolicy(QSizePolicy.Policy.Preferred, QSizePolicy.Policy.Minimum)
+        layout = QVBoxLayout(card)
+        layout.setContentsMargins(14, 14, 14, 14)
+        layout.setSpacing(8)
+        header = QLabel(title)
+        header.setObjectName("sectionTitle")
+        header.setWordWrap(True)
+        layout.addWidget(header)
+        return card
+
+    def _set_card_density(self, compact: bool) -> None:
+        margins = 8 if compact else 10
+        spacing = 5 if compact else 6
+        for card in (self.selected_card, self.actions_card, self.metrics_card, self.sparklines_card, self.theory_card):
+            layout = card.layout()
+            layout.setContentsMargins(margins, margins, margins, margins)
+            layout.setSpacing(spacing)
+
+    def _update_secondary_visibility(self) -> None:
+        allow_extras = not self._compact_mode and not self._short_mode
+        self.sparklines_card.setVisible(self._show_sparklines and allow_extras)
+        self.theory_card.setVisible(self._show_theory and allow_extras)
+
+    def _theory_text(self) -> str:
+        return (
+            "Орбитальная скорость:\n"
+            "v = sqrt(G * M / r)\n\n"
+            "Если увеличить скорость, орбита вытягивается.\n"
+            "Если уменьшить скорость, тело уходит ближе к Солнцу.\n\n"
+            "Подробная теория, описание программы и пресетов находятся в окне «Справка»."
+        )
+
+    def _camera_mode_label(self, mode: str) -> str:
+        labels = {
+            "manual": "ручная",
+            "follow_selected": "следовать за телом",
+            "follow_sun": "следовать за Солнцем",
+            "auto_frame": "авто-кадр",
+        }
+        return labels.get(mode, mode)
+
+    def _apply_tooltips(self) -> None:
+        self.selected_card.setToolTip("Параметры выбранного тела: положение, масса, скорость и орбитальный радиус.")
+        self.actions_card.setToolTip("Быстрые действия для выбранного тела.")
+        self.metrics_card.setToolTip("Ключевые показатели сцены и камеры.")
+        self.sparklines_card.setToolTip("История изменения расстояния и скорости выбранного тела.")
+        self.theory_card.setToolTip("Краткая физическая памятка. Полная версия находится в окне справки.")
+        self.center_button.setToolTip("Центрирует камеру на выбранном теле.")
+        self.follow_checkbox.setToolTip("Закрепляет камеру за выбранным телом.")
+        self.slow_button.setToolTip("Уменьшает скорость выбранного тела на 10%.")
+        self.fast_button.setToolTip("Увеличивает скорость выбранного тела на 10%.")
+        self.mass_down_button.setToolTip("Уменьшает массу выбранного тела на 10%.")
+        self.mass_up_button.setToolTip("Увеличивает массу выбранного тела на 10%.")
+
+    def _format_mass(self, mass: float) -> str:
+        if mass >= 1000.0:
+            return f"{mass:,.0f} M⊕".replace(",", " ")
+        if mass >= 10.0:
+            return f"{mass:.1f} M⊕"
+        if mass >= 1.0:
+            return f"{mass:.2f} M⊕"
+        return f"{mass:.4f} M⊕"
+
+```
+
+---
+
+## Файл: `src/gravitylab/ui/info_panel.py`
+
+**Назначение:** Совместимый алиас InfoPanel для InspectorPanel.
+
+```python
+from .inspector_panel import InspectorPanel as InfoPanel
+
+__all__ = ["InfoPanel"]
+
+```
+
+---
+
+## Файл: `src/gravitylab/ui/preset_browser.py`
+
+**Назначение:** Виджет выбора пресетов и вывода их описания.
+
+```python
+from __future__ import annotations
+
+from PyQt6.QtCore import pyqtSignal
+from PyQt6.QtWidgets import (
+    QComboBox,
+    QLabel,
+    QPushButton,
+    QVBoxLayout,
+    QWidget,
+)
+
+from ..sim.model import PresetDefinition
+
+
+class PresetBrowser(QWidget):
+    preset_requested = pyqtSignal(str)
+
+    def __init__(self, parent: QWidget | None = None) -> None:
+        super().__init__(parent)
+        layout = QVBoxLayout(self)
+        layout.setContentsMargins(0, 0, 0, 0)
+        layout.setSpacing(10)
+
+        self.preset_combo = QComboBox()
+        self.description_label = QLabel()
+        self.description_label.setObjectName("mutedText")
+        self.description_label.setWordWrap(True)
+        self.apply_button = QPushButton("Применить пресет")
+
+        layout.addWidget(self.preset_combo)
+        layout.addWidget(self.description_label)
+        layout.addWidget(self.apply_button)
+
+        self._apply_tooltips()
+        self.preset_combo.currentIndexChanged.connect(self._update_description)
+        self.apply_button.clicked.connect(self._emit_requested)
+
+    def set_presets(self, presets: tuple[PresetDefinition, ...], active_label: str | None = None) -> None:
+        self.preset_combo.blockSignals(True)
+        self.preset_combo.clear()
+        for preset in presets:
+            self.preset_combo.addItem(preset.label, preset)
+        if active_label:
+            for index in range(self.preset_combo.count()):
+                preset = self.preset_combo.itemData(index)
+                if preset and preset.label == active_label:
+                    self.preset_combo.setCurrentIndex(index)
+                    break
+        self.preset_combo.blockSignals(False)
+        self._update_description()
+
+    def _emit_requested(self) -> None:
+        preset = self.current_preset()
+        if preset is not None:
+            self.preset_requested.emit(preset.id)
+
+    def current_preset(self) -> PresetDefinition | None:
+        return self.preset_combo.currentData()
+
+    def _update_description(self) -> None:
+        preset = self.current_preset()
+        self.description_label.setText("" if preset is None else preset.description)
+
+    def _apply_tooltips(self) -> None:
+        self.preset_combo.setToolTip("Список готовых сцен для демонстрации разных режимов орбит и камеры.")
+        self.description_label.setToolTip("Краткое описание того, что показывает выбранный пресет.")
+        self.apply_button.setToolTip("Применяет выбранную сцену и её начальные параметры.")
+
+```
+
+---
+
+## Файл: `src/gravitylab/ui/canvas.py`
+
+**Назначение:** Центральный canvas: отрисовка тел/следов/подписей, камера, zoom и обработка мыши.
+
+```python
+from __future__ import annotations
+
+import math
+import random
+
+from PyQt6.QtCore import QPoint, QPointF, QRectF, Qt, pyqtSignal
+from PyQt6.QtGui import (
+    QColor,
+    QBrush,
+    QFont,
+    QLinearGradient,
+    QMouseEvent,
+    QPainter,
+    QPaintEvent,
+    QPen,
+    QPixmap,
+    QRadialGradient,
+    QWheelEvent,
+)
+from PyQt6.QtWidgets import QToolTip, QWidget
+
+from ..sim.model import BodySnapshot, SimulationSnapshot
+from ..theme import current_palette, qcolor
+
+
+class SimulationCanvas(QWidget):
+    """Канвас сцены: отрисовка системы, камера и взаимодействие мышью."""
+
+    body_selected = pyqtSignal(int)
+    zoom_changed = pyqtSignal(float)
+    manual_camera_interacted = pyqtSignal()
+
+    def __init__(self, parent: QWidget | None = None) -> None:
+        super().__init__(parent)
+        self.setMouseTracking(True)
+        self.setMinimumWidth(620)
+        self.snapshot_data: SimulationSnapshot | None = None
+        # offset_* задаёт сдвиг камеры в мировых координатах.
+        self.offset_x = 0.0
+        self.offset_y = 0.0
+        self.target_offset_x = 0.0
+        self.target_offset_y = 0.0
+        # zoom и target_zoom используются для плавного перехода в cinematic-режимах.
+        self.zoom = 1.0
+        self.target_zoom = 1.0
+        self.drag_active = False
+        self.last_drag_pos = QPoint()
+        self._stars = self._build_stars()
+        self._camera_initialized = False
+
+    def set_snapshot(self, snapshot: SimulationSnapshot) -> None:
+        # На каждом кадре получаем новый "снимок" сцены из модели.
+        self.snapshot_data = snapshot
+        self._update_camera_targets(snapshot)
+        self._advance_camera(snapshot)
+        self.update()
+
+    def reset_view(self) -> None:
+        self.offset_x = 0.0
+        self.offset_y = 0.0
+        self.target_offset_x = 0.0
+        self.target_offset_y = 0.0
+        self.set_zoom(1.0)
+
+    def fit_to_scene(self) -> None:
+        if not self.snapshot_data or not self.snapshot_data.bodies:
+            self.reset_view()
+            return
+        self._set_fit_targets(self.snapshot_data)
+        self.offset_x = self.target_offset_x
+        self.offset_y = self.target_offset_y
+        self.set_zoom(self.target_zoom)
+
+    def center_on_body_index(self, index: int) -> None:
+        if not self.snapshot_data or index >= len(self.snapshot_data.bodies):
+            return
+        body = self.snapshot_data.bodies[index]
+        self.offset_x = -body.x
+        self.offset_y = -body.y
+        self.target_offset_x = self.offset_x
+        self.target_offset_y = self.offset_y
+        self.update()
+
+    def export_screenshot(self, path: str) -> bool:
+        pixmap = QPixmap(self.size())
+        self.render(pixmap)
+        return pixmap.save(path, "PNG")
+
+    def world_to_screen(self, x: float, y: float) -> QPointF:
+        # Перевод из физических координат в пиксели окна.
+        center_x = self.width() * 0.5
+        center_y = self.height() * 0.5
+        return QPointF(center_x + (x + self.offset_x) * self.zoom, center_y + (y + self.offset_y) * self.zoom)
+
+    def screen_to_world(self, point: QPointF) -> tuple[float, float]:
+        # Обратное преобразование: из пикселей обратно в координаты модели.
+        center_x = self.width() * 0.5
+        center_y = self.height() * 0.5
+        world_x = (point.x() - center_x) / self.zoom - self.offset_x
+        world_y = (point.y() - center_y) / self.zoom - self.offset_y
+        return world_x, world_y
+
+    def body_screen_point(self, index: int) -> QPoint:
+        if not self.snapshot_data or index >= len(self.snapshot_data.bodies):
+            return QPoint()
+        point = self.world_to_screen(self.snapshot_data.bodies[index].x, self.snapshot_data.bodies[index].y)
+        return QPoint(int(point.x()), int(point.y()))
+
+    def set_zoom(self, zoom: float, emit_signal: bool = True) -> None:
+        clamped = max(0.2, min(4.0, zoom))
+        self.zoom = clamped
+        self.target_zoom = clamped
+        if emit_signal:
+            self.zoom_changed.emit(clamped)
+        self.update()
+
+    def paintEvent(self, _event: QPaintEvent) -> None:
+        # Порядок рендера важен: фон -> сетка -> следы -> тела -> оверлеи.
+        painter = QPainter(self)
+        painter.setRenderHint(QPainter.RenderHint.Antialiasing, True)
+        self._paint_background(painter)
+        if self.snapshot_data is None:
+            painter.end()
+            return
+        if self.snapshot_data.render_options.show_grid:
+            self._paint_grid(painter)
+        self._paint_orbit_hint(painter)
+        if self.snapshot_data.render_options.show_trails:
+            self._paint_trails(painter)
+        self._paint_bodies(painter)
+        if self.snapshot_data.render_options.clean_ui:
+            self._paint_clean_badge(painter)
+        painter.end()
+
+    def wheelEvent(self, event: QWheelEvent) -> None:
+        delta = event.angleDelta().y()
+        factor = 1.12 if delta > 0 else 0.9
+        # Масштабируем относительно курсора, а не центра экрана.
+        mouse_world_before = self.screen_to_world(event.position())
+        self.set_zoom(self.zoom * factor)
+        mouse_world_after = self.screen_to_world(event.position())
+        self.offset_x += mouse_world_after[0] - mouse_world_before[0]
+        self.offset_y += mouse_world_after[1] - mouse_world_before[1]
+        self.target_offset_x = self.offset_x
+        self.target_offset_y = self.offset_y
+        self.manual_camera_interacted.emit()
+        self.update()
+
+    def mousePressEvent(self, event: QMouseEvent) -> None:
+        if event.button() == Qt.MouseButton.LeftButton:
+            body = self._body_at_point(event.position())
+            if body:
+                # Клик по телу меняет выделение в главном окне.
+                self.body_selected.emit(body.index)
+                return
+            # Клик по пустому месту запускает ручной "drag camera".
+            self.drag_active = True
+            self.last_drag_pos = event.pos()
+
+    def mouseMoveEvent(self, event: QMouseEvent) -> None:
+        if self.drag_active:
+            # При перетаскивании двигаем камеру в мировых координатах.
+            delta = event.pos() - self.last_drag_pos
+            self.offset_x += delta.x() / self.zoom
+            self.offset_y += delta.y() / self.zoom
+            self.target_offset_x = self.offset_x
+            self.target_offset_y = self.offset_y
+            self.last_drag_pos = event.pos()
+            self.manual_camera_interacted.emit()
+            self.update()
+            return
+
+        body = self._body_at_point(event.position())
+        if body:
+            # Всплывающая подсказка для быстрого чтения параметров тела.
+            distance = math.hypot(body.x, body.y)
+            QToolTip.showText(
+                event.globalPosition().toPoint(),
+                f"{body.name}\nСкорость: {math.hypot(body.vx, body.vy):.2f}\nРасстояние до Солнца: {distance:.1f} ед.",
+                self,
+            )
+        else:
+            QToolTip.hideText()
+
+    def mouseReleaseEvent(self, event: QMouseEvent) -> None:
+        if event.button() == Qt.MouseButton.LeftButton:
+            self.drag_active = False
+
+    def mouseDoubleClickEvent(self, event: QMouseEvent) -> None:
+        body = self._body_at_point(event.position())
+        if body and body.index == 0:
+            self.reset_view()
+
+    def _build_stars(self) -> list[tuple[float, float, float, float]]:
+        rng = random.Random(7)
+        return [
+            (rng.random(), rng.random(), rng.uniform(0.5, 1.9), rng.uniform(0.10, 0.50))
+            for _ in range(116)
+        ]
+
+    def _update_camera_targets(self, snapshot: SimulationSnapshot) -> None:
+        if not self._camera_initialized:
+            # При первом кадре синхронизируемся с zoom из модели.
+            self.target_zoom = snapshot.render_options.zoom
+            self.zoom = snapshot.render_options.zoom
+            self._camera_initialized = True
+
+        if snapshot.camera_mode == "follow_sun":
+            self.target_offset_x = -snapshot.bodies[0].x
+            self.target_offset_y = -snapshot.bodies[0].y
+            return
+        if snapshot.camera_mode == "follow_selected" and snapshot.follow_target_index is not None:
+            target = snapshot.bodies[snapshot.follow_target_index]
+            self.target_offset_x = -target.x
+            self.target_offset_y = -target.y
+            return
+        if snapshot.camera_mode == "auto_frame":
+            self._set_fit_targets(snapshot)
+
+    def _set_fit_targets(self, snapshot: SimulationSnapshot) -> None:
+        # Рассчитываем прямоугольник, который покрывает все тела.
+        xs = [body.x for body in snapshot.bodies]
+        ys = [body.y for body in snapshot.bodies]
+        if not xs or not ys:
+            self.target_offset_x = 0.0
+            self.target_offset_y = 0.0
+            self.target_zoom = snapshot.render_options.zoom
+            return
+        min_x, max_x = min(xs), max(xs)
+        min_y, max_y = min(ys), max(ys)
+        center_x = (min_x + max_x) * 0.5
+        center_y = (min_y + max_y) * 0.5
+        width = max(1.0, max_x - min_x)
+        height = max(1.0, max_y - min_y)
+        self.target_offset_x = -center_x
+        self.target_offset_y = -center_y
+        margin = 180.0
+        avail_w = max(80.0, self.width() - margin)
+        avail_h = max(80.0, self.height() - margin)
+        # Ограничиваем zoom, чтобы не получить слишком "далеко" или слишком "близко".
+        self.target_zoom = max(0.35, min(2.6, min(avail_w / width, avail_h / height)))
+
+    def _advance_camera(self, snapshot: SimulationSnapshot) -> None:
+        if snapshot.render_options.cinematic_mode or snapshot.camera_mode != "manual":
+            # Плавное приближение к target-координатам камеры (easing).
+            blend = 0.16
+            self.offset_x += (self.target_offset_x - self.offset_x) * blend
+            self.offset_y += (self.target_offset_y - self.offset_y) * blend
+            self.zoom += (self.target_zoom - self.zoom) * 0.12
+        else:
+            self.target_zoom = snapshot.render_options.zoom
+
+    def _paint_background(self, painter: QPainter) -> None:
+        palette = current_palette()
+        gradient = QLinearGradient(0, 0, 0, self.height())
+        gradient.setColorAt(0.0, qcolor(palette.canvas_top))
+        gradient.setColorAt(0.36, qcolor(palette.canvas_mid))
+        gradient.setColorAt(1.0, qcolor(palette.canvas_bottom))
+        painter.fillRect(self.rect(), gradient)
+
+        left_nebula = QRadialGradient(self.width() * 0.16, self.height() * 0.22, self.width() * 0.48)
+        left_nebula.setColorAt(0.0, qcolor(palette.canvas_nebula_left))
+        left_nebula.setColorAt(0.42, qcolor(palette.canvas_nebula_left_soft))
+        left_nebula.setColorAt(1.0, QColor(0, 0, 0, 0))
+        painter.fillRect(self.rect(), left_nebula)
+
+        right_nebula = QRadialGradient(self.width() * 0.74, self.height() * 0.18, self.width() * 0.56)
+        right_nebula.setColorAt(0.0, qcolor(palette.canvas_nebula_right))
+        right_nebula.setColorAt(0.45, qcolor(palette.canvas_nebula_right_soft))
+        right_nebula.setColorAt(1.0, QColor(0, 0, 0, 0))
+        painter.fillRect(self.rect(), right_nebula)
+
+        horizon_glow = QRadialGradient(self.width() * 0.50, self.height() * 0.86, self.width() * 0.72)
+        horizon_glow.setColorAt(0.0, QColor(255, 255, 255, 34) if palette.canvas_top.startswith("#e") else QColor(96, 163, 235, 26))
+        horizon_glow.setColorAt(0.36, QColor(255, 255, 255, 16) if palette.canvas_top.startswith("#e") else QColor(96, 163, 235, 12))
+        horizon_glow.setColorAt(1.0, QColor(0, 0, 0, 0))
+        painter.fillRect(self.rect(), horizon_glow)
+
+        top_mist = QLinearGradient(0, 0, 0, self.height() * 0.32)
+        top_mist.setColorAt(0.0, QColor(255, 255, 255, 18) if palette.canvas_top.startswith("#e") else QColor(255, 255, 255, 6))
+        top_mist.setColorAt(1.0, QColor(0, 0, 0, 0))
+        painter.fillRect(QRectF(0, 0, self.width(), self.height() * 0.36), top_mist)
+
+        vignette = QRadialGradient(self.width() * 0.50, self.height() * 0.50, self.width() * 0.78)
+        vignette.setColorAt(0.72, QColor(0, 0, 0, 0))
+        vignette.setColorAt(1.0, QColor(8, 12, 20, 36) if not palette.canvas_top.startswith("#e") else QColor(70, 110, 160, 32))
+        painter.fillRect(self.rect(), vignette)
+
+        for x_ratio, y_ratio, radius, alpha in self._stars:
+            color = qcolor(palette.canvas_star)
+            color.setAlpha(int(alpha * 155))
+            painter.setPen(Qt.PenStyle.NoPen)
+            painter.setBrush(color)
+            painter.drawEllipse(QPointF(self.width() * x_ratio, self.height() * y_ratio), radius, radius)
+            if radius > 1.72:
+                halo = QColor(color)
+                halo.setAlpha(max(8, int(color.alpha() * 0.22)))
+                painter.setBrush(halo)
+                painter.drawEllipse(QPointF(self.width() * x_ratio, self.height() * y_ratio), radius * 1.55, radius * 1.55)
+
+    def _paint_grid(self, painter: QPainter) -> None:
+        if not self.snapshot_data:
+            return
+        world_step = self._adaptive_grid_step()
+        left_world, top_world = self.screen_to_world(QPointF(0.0, 0.0))
+        right_world, bottom_world = self.screen_to_world(QPointF(self.width(), self.height()))
+        start_x = math.floor(left_world / world_step) * world_step
+        start_y = math.floor(top_world / world_step) * world_step
+
+        palette = current_palette()
+        painter.setPen(QPen(qcolor(palette.grid_minor), 1))
+        x = start_x
+        while x <= right_world:
+            point = self.world_to_screen(x, 0.0)
+            painter.drawLine(int(point.x()), 0, int(point.x()), self.height())
+            x += world_step
+        y = start_y
+        while y <= bottom_world:
+            point = self.world_to_screen(0.0, y)
+            painter.drawLine(0, int(point.y()), self.width(), int(point.y()))
+            y += world_step
+
+        painter.setPen(QPen(qcolor(palette.grid_major), 1))
+        origin = self.world_to_screen(0.0, 0.0)
+        painter.drawLine(int(origin.x()), 0, int(origin.x()), self.height())
+        painter.drawLine(0, int(origin.y()), self.width(), int(origin.y()))
+
+    def _paint_orbit_hint(self, painter: QPainter) -> None:
+        if not self.snapshot_data:
+            return
+        selected = self.snapshot_data.bodies[self.snapshot_data.selected_index]
+        if len(selected.trail) < 12:
+            return
+        points = [self.world_to_screen(x, y) for x, y in selected.trail[-28:]]
+        painter.setPen(QPen(QColor(108, 188, 255, 156), 1.2, Qt.PenStyle.SolidLine, Qt.PenCapStyle.RoundCap))
+        for index in range(1, len(points)):
+            painter.drawLine(points[index - 1], points[index])
+
+    def _paint_trails(self, painter: QPainter) -> None:
+        if not self.snapshot_data:
+            return
+        max_alpha = self.snapshot_data.render_options.trail_alpha
+        for body in self.snapshot_data.bodies:
+            if len(body.trail) < 2:
+                continue
+            render_points = body.trail
+            if len(render_points) > 280:
+                # Для длинных хвостов делаем прореживание, чтобы не перегружать кадр.
+                stride = 2 if body.index == self.snapshot_data.selected_index else 3
+                render_points = render_points[::stride]
+            points = [self.world_to_screen(x, y) for x, y in render_points]
+            base_width = 1.22 if body.index == self.snapshot_data.selected_index else 0.78
+            draw_glow = body.index == self.snapshot_data.selected_index and not body.is_asteroid
+            for index in range(1, len(points)):
+                trail_progress = index / len(points)
+                alpha = max(8, int(max_alpha * (trail_progress ** 1.55)))
+                color = QColor(*body.color)
+                color.setAlpha(alpha)
+                width = base_width + trail_progress * (0.28 if body.index == self.snapshot_data.selected_index else 0.18)
+                if draw_glow:
+                    glow = QColor(color)
+                    glow.setAlpha(max(5, int(alpha * 0.18)))
+                    painter.setPen(QPen(glow, width * 1.9, Qt.PenStyle.SolidLine, Qt.PenCapStyle.RoundCap))
+                    painter.drawLine(points[index - 1], points[index])
+                painter.setPen(QPen(color, width, Qt.PenStyle.SolidLine, Qt.PenCapStyle.RoundCap))
+                painter.drawLine(points[index - 1], points[index])
+
+    def _paint_bodies(self, painter: QPainter) -> None:
+        if not self.snapshot_data:
+            return
+        occupied_label_rects: list[QRectF] = []
+        bodies = list(self.snapshot_data.bodies)
+        # Сначала подписываем важные тела, чтобы им проще было найти место без пересечений.
+        label_bodies = sorted(
+            [body for body in bodies[1:] if not body.is_asteroid],
+            key=lambda body: (
+                body.index != self.snapshot_data.selected_index,
+                math.hypot(self.world_to_screen(body.x, body.y).x() - self.width() * 0.5, self.world_to_screen(body.x, body.y).y() - self.height() * 0.5),
+            ),
+        )
+
+        for body in bodies:
+            center = self.world_to_screen(body.x, body.y)
+            radius = max(3.2, body.radius_px * self.zoom * 0.34)
+
+            if body.index == self.snapshot_data.selected_index and not body.is_asteroid:
+                self._paint_glow(painter, body, center)
+
+            if body.index == 0:
+                solar_glow_far = QRadialGradient(center, radius * 5.4)
+                solar_glow_far.setColorAt(0.0, QColor(255, 233, 168, 80))
+                solar_glow_far.setColorAt(0.32, QColor(255, 196, 116, 46))
+                solar_glow_far.setColorAt(1.0, QColor(255, 144, 0, 0))
+                painter.setBrush(QBrush(solar_glow_far))
+                painter.setPen(Qt.PenStyle.NoPen)
+                painter.drawEllipse(center, radius * 4.2, radius * 4.2)
+
+                solar_glow = QRadialGradient(center, radius * 3.9)
+                solar_glow.setColorAt(0.0, QColor(255, 243, 196, 240))
+                solar_glow.setColorAt(0.36, QColor(255, 201, 112, 128))
+                solar_glow.setColorAt(1.0, QColor(255, 144, 0, 0))
+                painter.setBrush(QBrush(solar_glow))
+                painter.setPen(Qt.PenStyle.NoPen)
+                painter.drawEllipse(center, radius * 3.4, radius * 3.4)
+
+                solar_core = QRadialGradient(center, radius * 1.15)
+                solar_core.setColorAt(0.0, QColor(255, 251, 232, 255))
+                solar_core.setColorAt(0.42, QColor(255, 228, 124, 252))
+                solar_core.setColorAt(1.0, QColor(244, 184, 42, 255))
+                painter.setBrush(QBrush(solar_core))
+                painter.setPen(Qt.PenStyle.NoPen)
+                painter.drawEllipse(center, radius * 1.03, radius * 1.03)
+
+                painter.setBrush(QColor(255, 255, 255, 52))
+                painter.drawEllipse(QPointF(center.x() - radius * 0.22, center.y() - radius * 0.22), radius * 0.30, radius * 0.30)
+                continue
+
+            painter.setPen(Qt.PenStyle.NoPen)
+            painter.setBrush(QBrush(QColor(*body.color)))
+            painter.drawEllipse(center, radius, radius)
+
+            if body.index == self.snapshot_data.selected_index and not body.is_asteroid:
+                painter.setBrush(Qt.BrushStyle.NoBrush)
+                painter.setPen(QPen(QColor(255, 255, 255, 230), 1.8))
+                painter.drawEllipse(center, radius + 7, radius + 7)
+
+        if self.zoom >= self.snapshot_data.render_options.label_zoom_threshold and self.snapshot_data.render_options.show_labels:
+            for body in label_bodies:
+                center = self.world_to_screen(body.x, body.y)
+                radius = max(3.2, body.radius_px * self.zoom * 0.34)
+                self._paint_body_label(painter, body, center, radius, occupied_label_rects)
+
+    def _paint_glow(self, painter: QPainter, body: BodySnapshot, center: QPointF) -> None:
+        radius = max(12.0, body.radius_px * self.zoom * 0.9)
+        glow = QRadialGradient(center, radius * 2.6)
+        glow.setColorAt(0.0, QColor(108, 188, 255, 125))
+        glow.setColorAt(1.0, QColor(108, 188, 255, 0))
+        painter.setPen(Qt.PenStyle.NoPen)
+        painter.setBrush(QBrush(glow))
+        painter.drawEllipse(center, radius * 2.2, radius * 2.2)
+
+    def _paint_clean_badge(self, painter: QPainter) -> None:
+        if not self.snapshot_data:
+            return
+        palette = current_palette()
+        badge_rect = QRectF(18.0, 18.0, 300.0, 44.0)
+        painter.setBrush(qcolor(palette.clean_badge_bg))
+        painter.setPen(QPen(qcolor(palette.clean_badge_border), 1))
+        painter.drawRoundedRect(badge_rect, 16, 16)
+        painter.setPen(qcolor(palette.clean_badge_text))
+        painter.drawText(
+            badge_rect.adjusted(14.0, 0.0, -14.0, 0.0),
+            Qt.AlignmentFlag.AlignVCenter | Qt.AlignmentFlag.AlignLeft,
+            f"{'Пауза' if self.snapshot_data.paused else 'Live'}  |  {self.snapshot_data.active_preset or 'Свободная сцена'}",
+        )
+
+    def _adaptive_grid_step(self) -> float:
+        candidate_steps = (25, 50, 100, 150, 200, 400, 800)
+        for step in candidate_steps:
+            pixels = step * self.zoom
+            if 42 <= pixels <= 130:
+                return float(step)
+        return 800.0
+
+    def _body_at_point(self, point: QPointF) -> BodySnapshot | None:
+        if not self.snapshot_data:
+            return None
+        for body in reversed(self.snapshot_data.bodies):
+            if body.is_asteroid:
+                continue
+            center = self.world_to_screen(body.x, body.y)
+            radius = max(10.0, body.radius_px * self.zoom * 0.58)
+            if math.hypot(point.x() - center.x(), point.y() - center.y()) <= radius:
+                return body
+        return None
+
+    def _paint_body_label(
+        self,
+        painter: QPainter,
+        body: BodySnapshot,
+        center: QPointF,
+        radius: float,
+        occupied_rects: list[QRectF],
+    ) -> None:
+        if self.snapshot_data is None or not painter.isActive():
+            return
+        palette = current_palette()
+        label_font = QFont(painter.font())
+        label_font.setPointSize(9 if self.zoom < 1.25 else 10)
+        label_font.setWeight(QFont.Weight.DemiBold if body.index == self.snapshot_data.selected_index else QFont.Weight.Medium)
+        painter.setFont(label_font)
+
+        metrics = painter.fontMetrics()
+        label = body.name
+        padding_x = 11
+        padding_y = 4
+        label_width = metrics.horizontalAdvance(label) + padding_x * 2
+        label_height = metrics.height() + padding_y * 2
+        rect = self._label_rect(center, radius, label_width, label_height, occupied_rects)
+
+        anchor_x = rect.x() if rect.center().x() > center.x() else rect.x() + rect.width()
+        line_start = QPointF(center.x(), center.y())
+        line_mid = QPointF(center.x() + (anchor_x - center.x()) * 0.34, center.y())
+        line_end = QPointF(anchor_x, rect.center().y())
+        connector = qcolor(palette.label_connector)
+        if body.index == self.snapshot_data.selected_index:
+            connector.setAlpha(min(255, connector.alpha() + 46))
+        painter.setPen(QPen(connector, 1.35 if body.index == self.snapshot_data.selected_index else 1.0))
+        painter.drawLine(line_start, line_mid)
+        painter.drawLine(line_mid, line_end)
+        painter.setBrush(connector)
+        painter.setPen(Qt.PenStyle.NoPen)
+        painter.drawEllipse(center, 1.8, 1.8)
+
+        shadow_rect = rect.translated(0.0, 2.0)
+        painter.setBrush(QColor(0, 0, 0, 18 if palette.canvas_top.startswith("#e") else 42))
+        painter.drawRoundedRect(shadow_rect, 10, 10)
+
+        painter.setBrush(Qt.BrushStyle.NoBrush)
+        border = qcolor(palette.border_strong if body.index == self.snapshot_data.selected_index else palette.border)
+        border.setAlpha(min(255, border.alpha() + 18))
+        painter.setPen(QPen(border, 1.0))
+        bg = qcolor(palette.label_bg_selected if body.index == self.snapshot_data.selected_index else palette.label_bg)
+        painter.setBrush(bg)
+        painter.drawRoundedRect(rect, 10, 10)
+
+        painter.setPen(
+            qcolor(palette.label_text_selected if body.index == self.snapshot_data.selected_index else palette.label_text)
+        )
+        text_rect = rect.adjusted(padding_x - 1, 0, -(padding_x - 1), 0)
+        painter.drawText(text_rect, Qt.AlignmentFlag.AlignVCenter | Qt.AlignmentFlag.AlignHCenter, label)
+        occupied_rects.append(rect.adjusted(-8, -5, 8, 5))
+
+    def _label_rect(
+        self,
+        center: QPointF,
+        radius: float,
+        label_width: float,
+        label_height: float,
+        occupied_rects: list[QRectF],
+    ) -> QRectF:
+        gap = 14.0
+        right_x = center.x() + radius + gap
+        left_x = center.x() - radius - gap - label_width
+        top_y = center.y() - radius - gap - label_height
+        bottom_y = center.y() + radius + gap
+        mid_y = center.y() - label_height * 0.5
+
+        prefer_left = center.x() > self.width() * 0.56
+        prefer_top = center.y() > self.height() * 0.52
+
+        candidates = []
+        if prefer_left:
+            candidates.extend(
+                [
+                    QRectF(left_x, mid_y, label_width, label_height),
+                    QRectF(left_x, top_y, label_width, label_height),
+                    QRectF(left_x, bottom_y, label_width, label_height),
+                ]
+            )
+        else:
+            candidates.extend(
+                [
+                    QRectF(right_x, mid_y, label_width, label_height),
+                    QRectF(right_x, top_y, label_width, label_height),
+                    QRectF(right_x, bottom_y, label_width, label_height),
+                ]
+            )
+
+        if prefer_top:
+            candidates.append(QRectF(center.x() - label_width * 0.5, top_y, label_width, label_height))
+            candidates.append(QRectF(center.x() - label_width * 0.5, bottom_y, label_width, label_height))
+        else:
+            candidates.append(QRectF(center.x() - label_width * 0.5, bottom_y, label_width, label_height))
+            candidates.append(QRectF(center.x() - label_width * 0.5, top_y, label_width, label_height))
+
+        for rect in candidates:
+            fitted = self._clamp_rect(rect)
+            # Берём первое положение подписи, которое не пересекается с уже занятыми.
+            if not any(fitted.intersects(existing) for existing in occupied_rects):
+                return fitted
+
+        fallback = self._clamp_rect(candidates[0])
+        shift_step = label_height + 10.0
+        for direction in (-1, 1, -2, 2, -3, 3):
+            shifted = self._clamp_rect(fallback.translated(0.0, direction * shift_step))
+            if not any(shifted.intersects(existing) for existing in occupied_rects):
+                return shifted
+        return fallback
+
+    def _clamp_rect(self, rect: QRectF) -> QRectF:
+        margin = 12.0
+        x = min(max(rect.x(), margin), max(margin, self.width() - rect.width() - margin))
+        y = min(max(rect.y(), margin), max(margin, self.height() - rect.height() - margin))
+        return QRectF(x, y, rect.width(), rect.height())
+
+```
+
+---
+
+## Файл: `src/gravitylab/ui/help_dialog.py`
+
+**Назначение:** Окно справки с вкладками: программа, физика, пресеты и управление.
+
+```python
+from __future__ import annotations
+
+import math
+
+from PyQt6.QtCore import Qt
+from PyQt6.QtGui import QColor, QPainter, QPen
+from PyQt6.QtWidgets import (
+    QDialog,
+    QFrame,
+    QGridLayout,
+    QLabel,
+    QScrollArea,
+    QTabWidget,
+    QTextBrowser,
+    QVBoxLayout,
+    QWidget,
+)
+
+from ..sim.model import PresetDefinition
+from ..theme import current_palette, qcolor
+
+
+PRESET_GUIDE: dict[str, dict[str, str]] = {
+    "single-orbit": {
+        "goal": "Показать устойчивую орбиту при удачно подобранной скорости.",
+        "observe": "Следите за почти постоянным расстоянием до Солнца и ровной траекторией.",
+        "change": "Измените скорость и посмотрите, когда круг начинает вытягиваться в эллипс.",
+        "conclusion": "Для устойчивой орбиты важен баланс между скоростью тела и притяжением звезды.",
+    },
+    "three-orbits": {
+        "goal": "Сравнить движение нескольких тел на разных радиусах.",
+        "observe": "Внутренние тела движутся быстрее, а внешние проходят орбиту медленнее.",
+        "change": "Меняйте массу, скорость и G, чтобы увидеть, как система становится более или менее устойчивой.",
+        "conclusion": "Чем ближе тело к Солнцу, тем быстрее оно должно двигаться для удержания орбиты.",
+    },
+    "solar-system": {
+        "goal": "Показать упрощённую модель Солнечной системы и пояс астероидов между Марсом и Юпитером.",
+        "observe": "Смотрите на разницу скоростей внутренних и внешних планет, а также на поведение астероидов.",
+        "change": "Попробуйте менять плотность пояса, G и режим «Только притяжение Солнца».",
+        "conclusion": "Даже упрощённая многотельная система показывает, что орбиты и возмущения зависят от взаимного влияния тел.",
+    },
+    "chaos": {
+        "goal": "Показать, как небольшие изменения скоростей делают систему менее регулярной.",
+        "observe": "Сравнивайте форму следов и степень расхождения орбит со временем.",
+        "change": "Уменьшите или увеличьте скорость отдельных планет и наблюдайте усиление хаоса.",
+        "conclusion": "Даже маленькие изменения начальных условий могут заметно изменить развитие системы.",
+    },
+    "close-approach": {
+        "goal": "Показать влияние близкого пролёта тел на траекторию.",
+        "observe": "Смотрите, как орбита вытягивается и меняется после сближения.",
+        "change": "Измените массу и скорость выбранной планеты, чтобы усилить или ослабить эффект возмущения.",
+        "conclusion": "При близком прохождении взаимное тяготение сильнее меняет направление и форму орбиты.",
+    },
+    "burst": {
+        "goal": "Показать, как избыток начальной скорости меняет орбиту.",
+        "observe": "Одна из планет заметно уходит на более вытянутую траекторию.",
+        "change": "Снизьте скорость до более умеренного значения и сравните форму орбиты.",
+        "conclusion": "Чем больше скорость относительно нужной круговой, тем сильнее орбита вытягивается.",
+    },
+    "near-escape": {
+        "goal": "Показать состояние, близкое к вылету из системы.",
+        "observe": "Следите, как тело уходит всё дальше и орбита становится почти открытой.",
+        "change": "Немного уменьшите скорость и посмотрите, вернётся ли траектория к связанной орбите.",
+        "conclusion": "При слишком большой скорости тело может почти покинуть систему.",
+    },
+    "spiral-in": {
+        "goal": "Показать, что недостаток скорости ведёт к смещению орбиты ближе к Солнцу.",
+        "observe": "Орбита становится более узкой и стремится внутрь.",
+        "change": "Постепенно поднимайте скорость и сравнивайте переход от падения к устойчивой орбите.",
+        "conclusion": "Если скорость мала, притяжение преобладает и тело смещается к центру системы.",
+    },
+    "gravity-showcase": {
+        "goal": "Показать влияние параметра G на движение всей системы.",
+        "observe": "С ростом G тела проходят орбиты быстрее и сильнее реагируют на возмущения.",
+        "change": "Сравните этот пресет с обычным режимом при G = 1.0.",
+        "conclusion": "При увеличении силы притяжения система становится более динамичной и чувствительной к массе тел.",
+    },
+    "binary-showcase": {
+        "goal": "Показать компактную сцену с двумя близкими орбитами.",
+        "observe": "Сравните скорости двух тел на близких радиусах.",
+        "change": "Измените массу одного тела и посмотрите, как изменятся возмущения.",
+        "conclusion": "Даже близкие по радиусу орбиты могут вести себя по-разному из-за скоростей и масс.",
+    },
+    "slingshot": {
+        "goal": "Показать эффект гравитационного манёвра в учебно-упрощённом виде.",
+        "observe": "Следите за изменением формы орбиты после прохождения рядом с другим телом.",
+        "change": "Меняйте скорость и массу выбранной планеты, чтобы наблюдать усиление манёвра.",
+        "conclusion": "Близкое прохождение рядом с массивным телом может заметно изменить траекторию.",
+    },
+}
+
+
+class PresetPreviewWidget(QWidget):
+    def __init__(self, preset: PresetDefinition, parent: QWidget | None = None) -> None:
+        super().__init__(parent)
+        self.preset = preset
+        self.setMinimumSize(220, 150)
+
+    def paintEvent(self, _event) -> None:
+        palette = current_palette()
+        painter = QPainter(self)
+        painter.setRenderHint(QPainter.RenderHint.Antialiasing, True)
+        painter.fillRect(self.rect(), qcolor(palette.card_alt))
+
+        center_x = self.width() * 0.5
+        center_y = self.height() * 0.55
+        max_radius = max((seed.radius for seed in self.preset.initial_state), default=1.0)
+        scale = min(self.width(), self.height()) * 0.32 / max_radius
+
+        painter.setPen(QPen(qcolor(palette.grid_minor), 1))
+        for seed in self.preset.initial_state:
+            orbit_radius = seed.radius * scale
+            painter.drawEllipse(
+                int(center_x - orbit_radius),
+                int(center_y - orbit_radius),
+                int(orbit_radius * 2),
+                int(orbit_radius * 2),
+            )
+
+        if self.preset.asteroid_belt_enabled:
+            belt_inner = self.preset.asteroid_belt_inner_radius or max_radius * 0.62
+            belt_outer = self.preset.asteroid_belt_outer_radius or max_radius * 0.72
+            asteroid_count = self.preset.asteroid_belt_count or 80
+            painter.setPen(Qt.PenStyle.NoPen)
+            painter.setBrush(qcolor("rgba(132, 156, 184, 0.70)"))
+            for asteroid_index in range(min(asteroid_count, 140)):
+                angle = asteroid_index * 0.41
+                ratio = (asteroid_index % 11) / 10.0
+                radius = (belt_inner + (belt_outer - belt_inner) * ratio) * scale
+                x = center_x + math.cos(angle) * radius
+                y = center_y + math.sin(angle) * radius
+                painter.drawEllipse(int(x - 1), int(y - 1), 2, 2)
+
+        sun_color = QColor(255, 207, 79)
+        painter.setPen(Qt.PenStyle.NoPen)
+        painter.setBrush(sun_color)
+        painter.drawEllipse(int(center_x - 12), int(center_y - 12), 24, 24)
+
+        for index, seed in enumerate(self.preset.initial_state, start=1):
+            angle = math.radians(seed.angle_deg)
+            x = center_x + math.cos(angle) * seed.radius * scale
+            y = center_y + math.sin(angle) * seed.radius * scale
+            color = QColor(*(seed.color or (76 + index * 20, 140 + index * 8, 220 - index * 10)))
+            painter.setBrush(color)
+            painter.drawEllipse(int(x - 5), int(y - 5), 10, 10)
+
+        painter.end()
+
+
+class PresetCard(QFrame):
+    def __init__(self, preset: PresetDefinition, parent: QWidget | None = None) -> None:
+        super().__init__(parent)
+        self.setObjectName("metricCard")
+        layout = QVBoxLayout(self)
+        layout.setContentsMargins(12, 12, 12, 12)
+        layout.setSpacing(8)
+
+        title = QLabel(preset.label)
+        title.setObjectName("sectionTitle")
+        title.setWordWrap(True)
+        text = QLabel(preset.description)
+        text.setObjectName("mutedText")
+        text.setWordWrap(True)
+        notes = PRESET_GUIDE.get(
+            preset.id,
+            {
+                "goal": "Готовая сцена для наблюдения за движением тел.",
+                "observe": "Следите за формой орбит, скоростью и расстоянием до Солнца.",
+                "change": "Меняйте скорость, массу и G, чтобы исследовать поведение системы.",
+                "conclusion": "Параметры движения и притяжения напрямую влияют на форму траектории.",
+            },
+        )
+        meta = QLabel(
+            f"Тел: {preset.planet_count}\n"
+            f"Камера: {preset.camera_mode}\n"
+            f"G: {preset.gravity if preset.gravity is not None else 1.00:.2f}\n"
+            f"Время: {preset.time_scale if preset.time_scale is not None else 1.0:.2f}x\n"
+            f"Пояс: {'да' if preset.asteroid_belt_enabled else 'нет'}"
+        )
+        meta.setWordWrap(True)
+        teaching = QLabel(
+            f"<b>Что показывает</b><br>{notes['goal']}<br><br>"
+            f"<b>На что смотреть</b><br>{notes['observe']}<br><br>"
+            f"<b>Что попробовать изменить</b><br>{notes['change']}<br><br>"
+            f"<b>Какой вывод можно сделать</b><br>{notes['conclusion']}"
+        )
+        teaching.setObjectName("mutedText")
+        teaching.setWordWrap(True)
+
+        layout.addWidget(title)
+        layout.addWidget(PresetPreviewWidget(preset))
+        layout.addWidget(text)
+        layout.addWidget(meta)
+        layout.addWidget(teaching)
+
+
+class HelpDialog(QDialog):
+    def __init__(self, presets: tuple[PresetDefinition, ...], parent: QWidget | None = None) -> None:
+        super().__init__(parent)
+        self.setWindowTitle("Справка GravityLab")
+        self.resize(980, 760)
+        self.setModal(False)
+
+        layout = QVBoxLayout(self)
+        layout.setContentsMargins(16, 16, 16, 16)
+        layout.setSpacing(12)
+
+        title = QLabel("Справка GravityLab")
+        title.setObjectName("sectionTitle")
+        subtitle = QLabel(
+            "Подробное описание программы, физической модели, готовых сцен и способов использования GravityLab на уроке и при самостоятельном изучении."
+        )
+        subtitle.setObjectName("mutedText")
+        subtitle.setWordWrap(True)
+        self.author_label = self._author_block()
+
+        self.tabs = QTabWidget()
+        self.tabs.addTab(self._overview_tab(), "Программа")
+        self.tabs.addTab(self._physics_tab(), "Физика")
+        self.tabs.addTab(self._presets_tab(presets), "Пресеты")
+        self.tabs.addTab(self._shortcuts_tab(), "Управление")
+
+        layout.addWidget(title)
+        layout.addWidget(subtitle)
+        layout.addWidget(self.author_label)
+        layout.addWidget(self.tabs, 1)
+
+    def _overview_tab(self) -> QWidget:
+        return self._html_browser(
+            """
+            <h2>Что делает GravityLab</h2>
+            <p><b>GravityLab</b> — это интерактивная 2D-модель гравитационной системы, в которой можно наблюдать орбиты тел вокруг Солнца,
+            сравнивать разные режимы движения и изучать влияние скорости, массы и силы притяжения на форму траектории.</p>
+
+            <h3>Назначение программы</h3>
+            <ul>
+              <li>Наглядно показывать движение тел под действием гравитации.</li>
+              <li>Давать возможность быстро проводить учебные эксперименты без сложных вычислений вручную.</li>
+              <li>Помогать сравнивать разные сценарии: устойчивые орбиты, хаос, почти вылет, падение к Солнцу, пояс астероидов.</li>
+              <li>Служить цифровой лабораторной работой или демонстрацией на уроке физики и астрономии.</li>
+            </ul>
+
+            <h3>Из чего состоит интерфейс</h3>
+            <ul>
+              <li><b>Левая панель</b> — настройки самой сцены: число тел, G, масштаб времени, отображение и готовые пресеты.</li>
+              <li><b>Центральная область</b> — главная сцена с телами, следами, сеткой, подписями и управлением камерой.</li>
+              <li><b>Правая панель</b> — подробные параметры выбранного тела, его масса, скорость, расстояние до Солнца и история изменений.</li>
+              <li><b>Верхняя панель</b> — быстрые действия: пауза, сброс, подгонка сцены, снимок, тема, справка и режим камеры.</li>
+              <li><b>Нижняя панель</b> — управление ходом эксперимента и быстрый выбор масштаба времени.</li>
+            </ul>
+
+            <h3>Что можно менять</h3>
+            <ul>
+              <li>Количество основных планет.</li>
+              <li>Силу притяжения <b>G</b>.</li>
+              <li>Масштаб времени.</li>
+              <li>Скорость и массу выбранного тела.</li>
+              <li>Наличие и плотность пояса астероидов.</li>
+              <li>Режим <b>Только притяжение Солнца</b>, который отключает взаимное влияние планет.</li>
+            </ul>
+
+            <h3>Что наблюдать</h3>
+            <ul>
+              <li>Форму орбит: круговая, вытянутая, спиральная, почти открытая.</li>
+              <li>Изменение расстояния до Солнца.</li>
+              <li>Изменение скорости тела на разных участках траектории.</li>
+              <li>Влияние массы и взаимного притяжения на соседние тела.</li>
+              <li>Разницу между спокойной системой и хаотическим режимом.</li>
+            </ul>
+
+            <h3>Как использовать на уроке</h3>
+            <p>GravityLab удобно применять как демонстрацию или как мини-лабораторную работу. Учитель может выбрать пресет,
+            поставить вопрос, предложить изменить один параметр и попросить учеников сформулировать вывод по наблюдаемым изменениям.</p>
+
+            <h3>Ограничения модели</h3>
+            <ul>
+              <li>Это учебная, а не профессиональная астрономическая модель.</li>
+              <li>Расстояния и скорости нормализованы для удобства наблюдения.</li>
+              <li>Параметр <b>G</b> используется в учебном масштабе и служит для экспериментов, а не для прямого воспроизведения системы SI.</li>
+              <li>Орбиты рассчитаны так, чтобы быть наглядными и устойчивыми в интерфейсе.</li>
+              <li>Массы тел показываются в массах Земли, чтобы их было удобно сравнивать между собой.</li>
+            </ul>
+
+            <h3>Автор</h3>
+            <p><b>Рыльцин Тимур</b>, 10А, МОУ СОШ №22.</p>
+            """
+        )
+
+    def _physics_tab(self) -> QWidget:
+        return self._html_browser(
+            """
+            <h2>Физическая модель</h2>
+            <p>В основе GravityLab лежит учебная модель движения тел под действием гравитации. Она достаточно проста, чтобы быть понятной,
+            и при этом достаточно выразительна, чтобы показывать реальные закономерности орбитального движения.</p>
+
+            <h3>Основные формулы</h3>
+            <p>Система подчиняется закону всемирного тяготения Ньютона:</p>
+            <pre>F = G * m1 * m2 / r²</pre>
+            <p>Для кругового движения вокруг центрального тела можно ориентироваться на орбитальную скорость:</p>
+            <pre>v_orb = sqrt(G * M / r)</pre>
+
+            <h3>Как интерпретировать параметры</h3>
+            <ul>
+              <li><b>G</b> — учебно-нормализованная сила притяжения. Чем она выше, тем сильнее тела ускоряются к Солнцу и друг к другу.</li>
+              <li><b>Масса</b> — задаётся в <b>массах Земли (M⊕)</b>. Это позволяет удобно сравнивать планеты между собой.</li>
+              <li><b>Масса Солнца</b> тоже выражена в массах Земли, поэтому в справке и инспекторе все тела показаны в одной системе единиц.</li>
+              <li><b>Расстояние</b> в сцене показано в учебных единицах, а не в километрах или астрономических единицах.</li>
+              <li><b>Масштаб времени</b> ускоряет или замедляет развитие сцены без изменения её структуры.</li>
+              <li><b>Следы</b> помогают видеть форму траектории и сравнивать разные режимы.</li>
+            </ul>
+
+            <h3>Что происходит при изменении скорости</h3>
+            <p>Если скорость увеличить, орбита становится более вытянутой. Если скорость уменьшить, тело смещается ближе к Солнцу.
+            При очень большой скорости траектория может стать почти открытой, и тело начнёт уходить из системы.</p>
+
+            <h3>Что происходит при изменении массы</h3>
+            <p>Если увеличить массу планеты, её гравитационное влияние на другие тела становится сильнее. Это особенно хорошо заметно
+            в сценах с несколькими планетами и в режиме с поясом астероидов. Масса влияет не только на само тело, но и на возмущения системы.</p>
+
+            <h3>Что происходит при изменении G</h3>
+            <p>Рост параметра G усиливает притяжение и делает движение более быстрым и более чувствительным к начальному положению тел.
+            При уменьшении G система становится спокойнее, а орбиты меняются медленнее.</p>
+
+            <h3>Что показывает режим Только притяжение Солнца</h3>
+            <p>В этом режиме все тела притягиваются только к Солнцу. Взаимное влияние планет и астероидов друг на друга отключается.
+            Этот режим полезен, чтобы сравнить идеализированную «простую» систему с полной многотельной моделью.</p>
+
+            <h3>Что важно помнить</h3>
+            <p>GravityLab не подменяет строгий курс небесной механики. Это учебная модель, которая помогает увидеть причинно-следственные связи:
+            как масса, скорость, расстояние и сила притяжения влияют на форму орбиты и поведение всей системы.</p>
+            """
+        )
+
+    def _presets_tab(self, presets: tuple[PresetDefinition, ...]) -> QWidget:
+        widget = QWidget()
+        layout = QVBoxLayout(widget)
+        layout.setContentsMargins(12, 12, 12, 12)
+        layout.setSpacing(12)
+
+        intro = QLabel(
+            "Каждый пресет — это готовая учебная сцена. Ниже можно посмотреть, что именно показывает каждый сценарий, "
+            "на что обратить внимание и какие параметры полезно менять во время урока или самостоятельной работы."
+        )
+        intro.setObjectName("mutedText")
+        intro.setWordWrap(True)
+        layout.addWidget(intro)
+
+        grid = QGridLayout()
+        grid.setHorizontalSpacing(12)
+        grid.setVerticalSpacing(12)
+        for index, preset in enumerate(presets):
+            row = index // 2
+            column = index % 2
+            grid.addWidget(PresetCard(preset), row, column)
+
+        container = QWidget()
+        container.setLayout(grid)
+        layout.addWidget(container)
+        layout.addStretch(1)
+        return self._wrap_scroll(widget)
+
+    def _shortcuts_tab(self) -> QWidget:
+        return self._html_browser(
+            """
+            <h2>Управление и навигация</h2>
+
+            <h3>Управление мышью</h3>
+            <ul>
+              <li><b>Клик по телу</b> — выбрать планету.</li>
+              <li><b>Колесо мыши</b> — изменить масштаб сцены.</li>
+              <li><b>Drag по пустому месту</b> — двигать камеру.</li>
+              <li><b>Двойной клик по Солнцу</b> — сбросить камеру.</li>
+            </ul>
+
+            <h3>Горячие клавиши</h3>
+            <ul>
+              <li><b>Space</b> — старт / пауза.</li>
+              <li><b>R</b> — сброс системы.</li>
+              <li><b>[</b> и <b>]</b> — переключение выбранного тела.</li>
+              <li><b>-</b> и <b>=</b> — уменьшить или увеличить скорость выбранной планеты.</li>
+              <li><b>Shift по интерфейсу не требуется</b>: основные действия доступны кнопками и чекбоксами.</li>
+              <li><b>PgUp / PgDown</b> — увеличить или уменьшить G.</li>
+              <li><b>T</b> — следы, <b>G</b> — сетка, <b>L</b> — подписи, <b>C</b> — теория.</li>
+              <li><b>O</b> — режим только притяжения Солнца.</li>
+              <li><b>F</b> — следование за выбранным телом.</li>
+              <li><b>U</b> — чистый UI.</li>
+            </ul>
+
+            <h3>Быстрые действия</h3>
+            <ul>
+              <li><b>Пауза</b> — остановить сцену и рассмотреть текущее положение тел.</li>
+              <li><b>Сброс</b> — вернуть выбранную сцену в начальное состояние.</li>
+              <li><b>Подогнать</b> — показать всю систему в окне.</li>
+              <li><b>Снимок</b> — сохранить текущий кадр.</li>
+              <li><b>Справка</b> — открыть подробное учебное описание программы.</li>
+            </ul>
+
+            <h3>Изменение параметров</h3>
+            <ul>
+              <li>Слева можно менять число планет, G, масштаб времени и плотность пояса астероидов.</li>
+              <li>Там же включаются режимы отображения: следы, сетка, подписи, теория и только притяжение Солнца.</li>
+              <li>В правой панели можно менять скорость и массу выбранного тела.</li>
+              <li>Через пресеты можно быстро загружать готовые учебные сцены без ручной настройки.</li>
+            </ul>
+
+            <h3>Как читать правую панель</h3>
+            <p>Правая панель показывает параметры выбранного тела: координаты, массу, скорость, расстояние до Солнца и историю изменения параметров во времени.
+            Это особенно полезно, когда нужно сравнить две сцены или зафиксировать результат эксперимента.</p>
+
+            <h3>Как использовать в учебной работе</h3>
+            <p>Удобный сценарий такой: выбрать пресет, выдвинуть гипотезу, изменить только один параметр, понаблюдать изменения и сформулировать вывод.
+            Тогда программа превращается не просто в демонстрацию, а в полноценный учебный инструмент.</p>
+            """
+        )
+
+    def _html_browser(self, html: str) -> QTextBrowser:
+        browser = QTextBrowser()
+        browser.setOpenExternalLinks(False)
+        browser.setHtml(html)
+        return browser
+
+    def _wrap_scroll(self, widget: QWidget) -> QScrollArea:
+        area = QScrollArea()
+        area.setWidgetResizable(True)
+        area.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
+        area.setWidget(widget)
+        return area
+
+    def _author_block(self) -> QLabel:
+        author = QLabel("Автор: Рыльцин Тимур, 10А, МОУ СОШ №22")
+        author.setObjectName("mutedText")
+        author.setWordWrap(True)
+        return author
+
+```
+

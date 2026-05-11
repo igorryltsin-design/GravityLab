@@ -137,7 +137,7 @@ class SimulationSnapshot:
 
 
 class GravitySim:
-    """2D N-body simulator with presentation-oriented state for the UI."""
+    """Учебный 2D-симулятор N-тел с состоянием, удобным для UI."""
 
     USE_EXPLICIT_EULER = False
     BODY_NAMES = (
@@ -173,8 +173,10 @@ class GravitySim:
         config: SimulationConfig | None = None,
         render_options: RenderOptions | None = None,
     ) -> None:
+        # Конфиг физики (dt, G, softening, массы) и флаги рендера задаются отдельно.
         self.config = config or SimulationConfig()
         self.render_options = render_options or RenderOptions()
+        # Пресеты - готовые учебные сцены с начальными условиями.
         self.presets = self._build_presets()
 
         self.num_planets = self.config.default_planets
@@ -204,6 +206,7 @@ class GravitySim:
 
     @g.setter
     def g(self, value: float) -> None:
+        # Ограничиваем G, чтобы симуляция оставалась устойчивой и управляемой.
         self.config = SimulationConfig(**{**self.config.__dict__, "g": max(0.0, min(12.0, value))})
 
     def reset_system(self, n_planets: int) -> None:
@@ -233,6 +236,7 @@ class GravitySim:
             raise ValueError(f"Unknown preset: {preset_id}")
         preset = self.presets[preset_id]
 
+        # Пресет может менять "глобальные" параметры сцены.
         if preset.gravity is not None:
             self.set_g(preset.gravity)
         if preset.time_scale is not None:
@@ -251,6 +255,7 @@ class GravitySim:
         self.active_preset = preset.label
         self.set_selected_planet(preset.selected_index)
 
+        # Пресет также задаёт стартовые визуальные режимы.
         self.render_options.show_grid = preset.render_defaults.show_grid
         self.render_options.show_trails = preset.render_defaults.show_trails
         self.render_options.show_theory = preset.render_defaults.show_theory
@@ -294,12 +299,14 @@ class GravitySim:
         body.mass = max(0.0001, min(1_000_000.0, body.mass * factor))
 
     def set_time_scale(self, scale: float) -> None:
+        # Слишком большие значения делают модель "рваной", поэтому есть верхняя граница.
         self.time_scale = max(0.05, min(50.0, scale))
 
     def set_g(self, value: float) -> None:
         self.g = value
 
     def set_render_zoom(self, zoom: float) -> None:
+        # Зум хранится в модели, чтобы UI и физическая сцена были синхронизированы.
         self.render_options.zoom = max(0.2, min(4.0, zoom))
 
     def set_clean_ui(self, enabled: bool) -> None:
@@ -405,6 +412,7 @@ class GravitySim:
         if self.asteroid_belt_enabled == enabled:
             return
         self.asteroid_belt_enabled = enabled
+        # Пересобираем систему из тех же seed-ов, чтобы корректно добавить/убрать астероиды.
         selected_index = self.selected_planet_idx
         active_preset = self.active_preset
         self._apply_seeded_system(self._current_seeds)
@@ -412,6 +420,7 @@ class GravitySim:
         self.active_preset = active_preset
 
     def set_asteroid_belt_density(self, count: int) -> None:
+        # Плотность ограничена, чтобы не перегрузить рендер и тесты.
         clamped = max(0, min(240, int(count)))
         if self.asteroid_belt_count == clamped:
             return
@@ -424,10 +433,12 @@ class GravitySim:
             self.active_preset = active_preset
 
     def step(self, dt: float | None = None) -> None:
+        # Реальный шаг интегрирования: базовый dt * пользовательский масштаб времени.
         step_dt = (dt if dt is not None else self.config.dt) * self.time_scale
         acc = self.compute_accelerations()
 
         if self.USE_EXPLICIT_EULER:
+            # Классический явный Эйлер: сначала координаты, потом скорость.
             for i, body in enumerate(self.bodies):
                 ax, ay = acc[i]
                 body.x += body.vx * step_dt
@@ -435,6 +446,7 @@ class GravitySim:
                 body.vx += ax * step_dt
                 body.vy += ay * step_dt
         else:
+            # Полу-неявный вариант обычно устойчивее для орбитальных сцен.
             for i, body in enumerate(self.bodies):
                 ax, ay = acc[i]
                 body.vx += ax * step_dt
@@ -443,6 +455,7 @@ class GravitySim:
                 body.y += body.vy * step_dt
 
         if self.render_options.show_trails:
+            # Следы хранятся как очередь фиксированной длины.
             for body in self.bodies:
                 body.trail.append((body.x, body.y))
 
@@ -478,6 +491,7 @@ class GravitySim:
             return list(zip(ax, ay))
 
         if self.only_sun:
+            # Упрощённый учебный режим: каждая планета чувствует только Солнце.
             sun = self.bodies[0]
             for i in range(1, n_bodies):
                 body = self.bodies[i]
@@ -486,6 +500,7 @@ class GravitySim:
                 ay[i] += force_y
             return list(zip(ax, ay))
 
+        # Полная N-body модель: суммируем вклад каждого тела для каждого тела.
         for i, body_i in enumerate(self.bodies):
             for j, body_j in enumerate(self.bodies):
                 if i == j:
@@ -520,6 +535,7 @@ class GravitySim:
         )
 
     def snapshot(self, trail_points: int | None = None) -> SimulationSnapshot:
+        # UI получает "снимок" (неживые данные), чтобы не мутировать модель напрямую.
         bodies = tuple(
             BodySnapshot(
                 index=i,
@@ -573,12 +589,14 @@ class GravitySim:
             return tuple(body.trail)
         cap = max(24, int(trail_points))
         if body.is_asteroid:
+            # Для астероидов ограничиваем хвост сильнее: их много и они мелкие.
             cap = min(cap // 4, 96)
         if len(body.trail) <= cap:
             return tuple(body.trail)
         return tuple(list(body.trail)[-cap:])
 
     def _create_default_system(self, n_planets: int) -> None:
+        # Если тел несколько, радиусы раскладываются от центра к внешней орбите.
         seeds = tuple(
             BodySeed(name=self._body_name(i + 1), radius=200.0 if n_planets == 1 else 120.0 + 200.0 * i / max(1, n_planets - 1), angle_deg=(360.0 * i / n_planets))
             for i in range(n_planets)
@@ -586,6 +604,7 @@ class GravitySim:
         self._apply_seeded_system(seeds)
 
     def _apply_seeded_system(self, seeds: tuple[BodySeed, ...]) -> None:
+        # Полная пересборка сцены: Солнце + планеты (+ астероиды по режиму).
         self._current_seeds = tuple(seeds)
         self.num_planets = len(seeds)
         self.selected_planet_idx = 1 if self.num_planets else 0
@@ -611,9 +630,11 @@ class GravitySim:
             radius = seed.radius
             x = radius * math.cos(angle)
             y = radius * math.sin(angle)
+            # Базовая орбитальная скорость в учебных единицах.
             orbital_speed = math.sqrt(max(0.0, self.g * self._simulation_mass(self.config.sun_mass) / max(radius, 1e-9)))
             tangential_angle = angle + math.pi / 2 + math.radians(seed.angle_velocity_bias_deg)
 
+            # Касательная скорость + небольшой радиальный сдвиг для "живых" пресетов.
             vx = orbital_speed * seed.speed_scale * math.cos(tangential_angle) + seed.radial_bias * math.cos(angle)
             vy = orbital_speed * seed.speed_scale * math.sin(tangential_angle) + seed.radial_bias * math.sin(angle)
             color = seed.color or self._planet_color(index - 1)
@@ -639,6 +660,7 @@ class GravitySim:
         self.advance_metrics_history()
 
     def _append_asteroid_belt(self) -> None:
+        # Фиксированный seed => воспроизводимая сцена при одинаковых параметрах.
         rng = random.Random(17)
         belt_inner, belt_outer = self._asteroid_belt_range()
         for asteroid_index in range(self.asteroid_belt_count):
@@ -676,6 +698,8 @@ class GravitySim:
             if not body.is_asteroid
         )
         if len(radii) >= 2:
+            # Пытаемся найти самый большой зазор между соседними орбитами
+            # и разместить пояс именно там (нагляднее для урока).
             left, right, gap = max(
                 (
                     (radii[index], radii[index + 1], radii[index + 1] - radii[index])
@@ -702,6 +726,7 @@ class GravitySim:
         }
 
     def _build_presets(self) -> dict[str, PresetDefinition]:
+        # Базовый набор визуальных флагов для "демо" режима и "кино" режима.
         demo_defaults = RenderOptions(
             show_grid=True,
             show_trails=True,
@@ -945,6 +970,7 @@ class GravitySim:
     ) -> tuple[float, float]:
         dx = xj - xi
         dy = yj - yi
+        # Softening добавляет "смягчение" вблизи нулевой дистанции, чтобы не было взрывных ускорений.
         r2 = dx * dx + dy * dy + self.config.softening * self.config.softening
         inv_r = 1.0 / math.sqrt(r2)
         inv_r3 = inv_r * inv_r * inv_r
