@@ -24,7 +24,6 @@ const controls = {
   inspectorToggle: document.getElementById("inspectorToggle"),
   closeInspectorButton: document.getElementById("closeInspectorButton"),
   showButton: document.getElementById("showButton"),
-  screenshotButton: document.getElementById("screenshotButton"),
   copyLinkButton: document.getElementById("copyLinkButton"),
   bodyCount: document.getElementById("bodyCount"),
   activePreset: document.getElementById("activePreset"),
@@ -332,11 +331,6 @@ function drawBackground() {
   ctx.fillStyle = gradient;
   ctx.fillRect(0, 0, width, height);
 
-  if (controls.preset.value === "chaos") {
-    const pulse = 0.18 + Math.sin(state.simTime * 1.8) * 0.06;
-    ctx.fillStyle = `rgba(255, 115, 138, ${pulse})`;
-    ctx.fillRect(0, 0, width, height);
-  }
 }
 
 function drawTrails() {
@@ -487,15 +481,6 @@ function toggleShow() {
   }
 }
 
-function saveScreenshot() {
-  const link = document.createElement("a");
-  const presetId = controls.preset.value;
-  link.download = `gravitylab-${presetId}.png`;
-  link.href = canvas.toDataURL("image/png");
-  link.click();
-  showToast("Скриншот сохранен");
-}
-
 async function copySiteLink() {
   try {
     await navigator.clipboard.writeText(siteUrl);
@@ -624,7 +609,6 @@ controls.exitPresentationButton.addEventListener("click", () => setPresentationM
 controls.inspectorToggle.addEventListener("click", toggleInspector);
 controls.closeInspectorButton.addEventListener("click", () => document.body.classList.remove("inspector-open"));
 controls.showButton.addEventListener("click", toggleShow);
-controls.screenshotButton.addEventListener("click", saveScreenshot);
 controls.copyLinkButton.addEventListener("click", copySiteLink);
 canvas.addEventListener("click", (event) => selectAt(event.clientX, event.clientY));
 window.addEventListener("resize", () => {
@@ -652,4 +636,5 @@ window.addEventListener("keydown", (event) => {
 
 resizeCanvas();
 resetSimulation();
+startShow();
 requestAnimationFrame(tick);

@@ -199,46 +199,6 @@ input[type="range"] {
   background: rgba(86, 214, 194, 0.16);
 }
 
-.wide-button {
-  margin-top: 10px;
-}
-
-.qr-card {
-  display: grid;
-  grid-template-columns: 64px minmax(0, 1fr);
-  gap: 12px;
-  align-items: center;
-  margin-top: 18px;
-  padding: 12px;
-  border: 1px solid var(--panel-border);
-  border-radius: 8px;
-  background: rgba(255, 255, 255, 0.045);
-}
-
-.qr-card img {
-  display: block;
-  width: 64px;
-  height: 64px;
-  border-radius: 6px;
-  background: #fff;
-}
-
-.qr-card strong,
-.qr-card a {
-  display: block;
-}
-
-.qr-card strong {
-  margin-bottom: 4px;
-  font-size: 13px;
-}
-
-.qr-card a {
-  color: var(--accent);
-  font-size: 12px;
-  overflow-wrap: anywhere;
-}
-
 .stage {
   position: relative;
   min-width: 0;
@@ -639,14 +599,6 @@ body.presentation-mode .top-hud {
   .button-row,
   .utility-row {
     margin-top: 0;
-  }
-
-  .wide-button {
-    margin-top: 0;
-  }
-
-  .qr-card {
-    display: none;
   }
 
   .hud {
