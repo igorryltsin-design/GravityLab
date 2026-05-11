@@ -437,15 +437,6 @@ function showToast(message) {
   toastTimer = window.setTimeout(() => controls.toast.classList.remove("is-visible"), 2600);
 }
 
-function createNoiseBuffer(context) {
-  const buffer = context.createBuffer(1, context.sampleRate * 2, context.sampleRate);
-  const data = buffer.getChannelData(0);
-  for (let i = 0; i < data.length; i += 1) {
-    data[i] = Math.random() * 2 - 1;
-  }
-  return buffer;
-}
-
 function startMusic() {
   const AudioContext = window.AudioContext || window.webkitAudioContext;
   if (!AudioContext) {
@@ -460,59 +451,70 @@ function startMusic() {
 
   const now = audioContext.currentTime;
   const master = audioContext.createGain();
-  const filter = audioContext.createBiquadFilter();
+  const padFilter = audioContext.createBiquadFilter();
+  const melodyFilter = audioContext.createBiquadFilter();
   const delay = audioContext.createDelay(4);
   const feedback = audioContext.createGain();
-  const shimmer = audioContext.createGain();
-  const noise = audioContext.createBufferSource();
-  const noiseGain = audioContext.createGain();
-  const noiseFilter = audioContext.createBiquadFilter();
-  const oscillators = [
-    { frequency: 73.42, type: "sine", gain: 0.11, detune: -6 },
-    { frequency: 110.0, type: "triangle", gain: 0.075, detune: 5 },
-    { frequency: 146.83, type: "sine", gain: 0.05, detune: 2 },
-    { frequency: 220.0, type: "sine", gain: 0.035, detune: -9 },
+  const wet = audioContext.createGain();
+  const padOscillators = [
+    { frequency: 55.0, gain: 0.035, detune: -4 },
+    { frequency: 82.41, gain: 0.028, detune: 5 },
+    { frequency: 110.0, gain: 0.024, detune: -8 },
   ].map((config) => {
     const oscillator = audioContext.createOscillator();
     const gain = audioContext.createGain();
-    oscillator.type = config.type;
+    oscillator.type = "sine";
     oscillator.frequency.value = config.frequency;
     oscillator.detune.value = config.detune;
     gain.gain.setValueAtTime(0, now);
-    gain.gain.linearRampToValueAtTime(config.gain, now + 1.8);
-    oscillator.connect(gain).connect(filter);
+    gain.gain.linearRampToValueAtTime(config.gain, now + 2.5);
+    oscillator.connect(gain).connect(padFilter);
     oscillator.start(now);
     return { oscillator, gain };
   });
+  const melodyOscillator = audioContext.createOscillator();
+  const melodyGain = audioContext.createGain();
+  const melodyNotes = [220, 277.18, 329.63, 415.3, 369.99, 329.63, 277.18, 246.94, 220, 329.63, 493.88, 415.3];
+  const noteLength = 0.72;
 
-  filter.type = "lowpass";
-  filter.frequency.setValueAtTime(760, now);
-  filter.Q.value = 0.6;
-  delay.delayTime.value = 0.58;
-  feedback.gain.value = 0.26;
-  shimmer.gain.value = 0.18;
+  melodyOscillator.type = "triangle";
+  melodyGain.gain.setValueAtTime(0, now);
+  melodyNotes.forEach((frequency, index) => {
+    const start = now + 0.35 + index * noteLength;
+    const end = start + noteLength * 0.62;
+    melodyOscillator.frequency.setValueAtTime(frequency, start);
+    melodyGain.gain.setValueAtTime(0, start);
+    melodyGain.gain.linearRampToValueAtTime(0.105, start + 0.08);
+    melodyGain.gain.exponentialRampToValueAtTime(0.006, end);
+    melodyGain.gain.setValueAtTime(0, end + 0.03);
+  });
+  melodyOscillator.loop = true;
+  melodyOscillator.connect(melodyGain).connect(melodyFilter);
+  melodyOscillator.start(now);
+
+  padFilter.type = "lowpass";
+  padFilter.frequency.setValueAtTime(540, now);
+  padFilter.Q.value = 0.5;
+  melodyFilter.type = "lowpass";
+  melodyFilter.frequency.setValueAtTime(1500, now);
+  melodyFilter.Q.value = 0.7;
+  delay.delayTime.value = 0.42;
+  feedback.gain.value = 0.22;
+  wet.gain.value = 0.28;
   master.gain.setValueAtTime(0, now);
-  master.gain.linearRampToValueAtTime(0.32, now + 2);
+  master.gain.linearRampToValueAtTime(0.38, now + 1.6);
 
-  noise.buffer = createNoiseBuffer(audioContext);
-  noise.loop = true;
-  noiseFilter.type = "lowpass";
-  noiseFilter.frequency.value = 420;
-  noiseGain.gain.setValueAtTime(0, now);
-  noiseGain.gain.linearRampToValueAtTime(0.012, now + 2.4);
-  noise.connect(noiseFilter).connect(noiseGain).connect(filter);
-  noise.start(now);
-
-  filter.connect(delay);
-  filter.connect(master);
+  padFilter.connect(master);
+  melodyFilter.connect(master);
+  melodyFilter.connect(delay);
   delay.connect(feedback).connect(delay);
-  delay.connect(shimmer).connect(master);
+  delay.connect(wet).connect(master);
   master.connect(audioContext.destination);
 
-  musicNodes = { master, oscillators, noise, noiseGain };
+  musicNodes = { master, padOscillators, melodyOscillator };
   controls.musicButton.classList.add("is-active");
   controls.musicButton.textContent = "Звук вкл.";
-  showToast("Космическая музыка включена");
+  showToast("Мелодия включена");
 }
 
 function stopMusic() {
@@ -521,10 +523,10 @@ function stopMusic() {
   musicNodes.master.gain.cancelScheduledValues(now);
   musicNodes.master.gain.setValueAtTime(musicNodes.master.gain.value, now);
   musicNodes.master.gain.linearRampToValueAtTime(0, now + 0.7);
-  for (const { oscillator } of musicNodes.oscillators) {
+  for (const { oscillator } of musicNodes.padOscillators) {
     oscillator.stop(now + 0.8);
   }
-  musicNodes.noise.stop(now + 0.8);
+  musicNodes.melodyOscillator.stop(now + 0.8);
   musicNodes = null;
   controls.musicButton.classList.remove("is-active");
   controls.musicButton.textContent = "Музыка";
