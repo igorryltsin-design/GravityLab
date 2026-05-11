@@ -1,0 +1,94 @@
+<!doctype html>
+<html lang="ru">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>GravityLab Web</title>
+    <link rel="stylesheet" href="./styles.css">
+  </head>
+  <body>
+    <main class="app-shell">
+      <aside class="panel left-panel" aria-label="Панель управления">
+        <div class="brand">
+          <span class="brand-mark"></span>
+          <div>
+            <h1>GravityLab</h1>
+            <p>N-body web sandbox</p>
+          </div>
+        </div>
+
+        <section class="control-group">
+          <label for="preset">Пресет</label>
+          <select id="preset">
+            <option value="three-orbits">Три орбиты</option>
+            <option value="single-orbit">Одна планета</option>
+            <option value="chaos">Хаотичная система</option>
+            <option value="binary-giants">Два гиганта</option>
+            <option value="asteroid-belt">Пояс астероидов</option>
+          </select>
+        </section>
+
+        <section class="control-group">
+          <div class="row-label">
+            <label for="gravity">G</label>
+            <output id="gravityValue">1.00</output>
+          </div>
+          <input id="gravity" type="range" min="0" max="6" step="0.05" value="1">
+        </section>
+
+        <section class="control-group">
+          <div class="row-label">
+            <label for="timeScale">Скорость</label>
+            <output id="timeScaleValue">1.0x</output>
+          </div>
+          <input id="timeScale" type="range" min="0.1" max="4" step="0.1" value="1">
+        </section>
+
+        <section class="control-group toggles">
+          <label><input id="toggleTrails" type="checkbox" checked> Следы</label>
+          <label><input id="toggleGrid" type="checkbox" checked> Сетка</label>
+          <label><input id="toggleLabels" type="checkbox" checked> Подписи</label>
+        </section>
+
+        <div class="button-row">
+          <button id="pauseButton" type="button">Пауза</button>
+          <button id="resetButton" type="button">Сброс</button>
+        </div>
+      </aside>
+
+      <section class="stage" aria-label="Сцена симуляции">
+        <canvas id="spaceCanvas"></canvas>
+        <div class="hud top-hud">
+          <span id="bodyCount">0 тел</span>
+          <span id="simTime">t=0.0</span>
+          <span id="energyState">stable</span>
+        </div>
+        <div class="hud bottom-hud">
+          <span>Space: пауза</span>
+          <span>R: сброс</span>
+          <span>Клик: выбрать тело</span>
+        </div>
+      </section>
+
+      <aside class="panel right-panel" aria-label="Инспектор">
+        <h2>Инспектор</h2>
+        <div class="selected-card">
+          <span id="selectedColor" class="selected-dot"></span>
+          <div>
+            <strong id="selectedName">Солнце</strong>
+            <span id="selectedKind">звезда</span>
+          </div>
+        </div>
+        <dl class="stats">
+          <div><dt>Масса</dt><dd id="selectedMass">0</dd></div>
+          <div><dt>Скорость</dt><dd id="selectedSpeed">0</dd></div>
+          <div><dt>Радиус орбиты</dt><dd id="selectedRadius">0</dd></div>
+          <div><dt>Координаты</dt><dd id="selectedPosition">0, 0</dd></div>
+        </dl>
+        <canvas id="sparkline" width="320" height="96" aria-label="График скорости"></canvas>
+      </aside>
+    </main>
+
+    <script src="./app.js"></script>
+  </body>
+</html>

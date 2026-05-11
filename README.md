@@ -25,6 +25,31 @@ gravitylab
 python3 gravity_sim_study_pyqt.py
 ```
 
+### Web-версия
+
+В проекте есть легкая статическая web-версия без сборки и дополнительных зависимостей:
+
+```bash
+python3 -m http.server 8080 --directory web
+```
+
+После запуска откройте:
+
+```text
+http://127.0.0.1:8080/
+```
+
+### Публикация на GitHub Pages
+
+После push в ветку `main` GitHub Actions публикует папку `web/` на GitHub Pages.
+В настройках репозитория откройте `Settings -> Pages` и выберите источник `GitHub Actions`.
+
+Адрес сайта для этого репозитория:
+
+```text
+https://igorryltsin-design.github.io/GravityLab/
+```
+
 ## Сборка
 
 Собирать нужно отдельно на каждой целевой системе. Кросс-сборку для `macOS` и `Windows` этот проект не настраивает.
