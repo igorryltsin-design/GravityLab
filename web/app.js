@@ -456,6 +456,7 @@ function startMusic() {
   const delay = audioContext.createDelay(4);
   const feedback = audioContext.createGain();
   const wet = audioContext.createGain();
+  const melodyOutput = audioContext.createGain();
   const padOscillators = [
     { frequency: 55.0, gain: 0.035, detune: -4 },
     { frequency: 82.41, gain: 0.028, detune: 5 },
@@ -472,25 +473,8 @@ function startMusic() {
     oscillator.start(now);
     return { oscillator, gain };
   });
-  const melodyOscillator = audioContext.createOscillator();
-  const melodyGain = audioContext.createGain();
   const melodyNotes = [220, 277.18, 329.63, 415.3, 369.99, 329.63, 277.18, 246.94, 220, 329.63, 493.88, 415.3];
   const noteLength = 0.72;
-
-  melodyOscillator.type = "triangle";
-  melodyGain.gain.setValueAtTime(0, now);
-  melodyNotes.forEach((frequency, index) => {
-    const start = now + 0.35 + index * noteLength;
-    const end = start + noteLength * 0.62;
-    melodyOscillator.frequency.setValueAtTime(frequency, start);
-    melodyGain.gain.setValueAtTime(0, start);
-    melodyGain.gain.linearRampToValueAtTime(0.105, start + 0.08);
-    melodyGain.gain.exponentialRampToValueAtTime(0.006, end);
-    melodyGain.gain.setValueAtTime(0, end + 0.03);
-  });
-  melodyOscillator.loop = true;
-  melodyOscillator.connect(melodyGain).connect(melodyFilter);
-  melodyOscillator.start(now);
 
   padFilter.type = "lowpass";
   padFilter.frequency.setValueAtTime(540, now);
@@ -505,13 +489,38 @@ function startMusic() {
   master.gain.linearRampToValueAtTime(0.38, now + 1.6);
 
   padFilter.connect(master);
+  melodyOutput.connect(melodyFilter);
   melodyFilter.connect(master);
   melodyFilter.connect(delay);
   delay.connect(feedback).connect(delay);
   delay.connect(wet).connect(master);
   master.connect(audioContext.destination);
 
-  musicNodes = { master, padOscillators, melodyOscillator };
+  let noteIndex = 0;
+  function scheduleMelodyNote() {
+    if (!musicNodes) return;
+    const start = audioContext.currentTime + 0.03;
+    const end = start + noteLength * 0.62;
+    const oscillator = audioContext.createOscillator();
+    const gain = audioContext.createGain();
+    oscillator.type = "triangle";
+    oscillator.frequency.setValueAtTime(melodyNotes[noteIndex % melodyNotes.length], start);
+    gain.gain.setValueAtTime(0, start);
+    gain.gain.linearRampToValueAtTime(0.105, start + 0.08);
+    gain.gain.exponentialRampToValueAtTime(0.006, end);
+    gain.gain.setValueAtTime(0, end + 0.03);
+    oscillator.connect(gain).connect(melodyOutput);
+    oscillator.start(start);
+    oscillator.stop(end + 0.08);
+    noteIndex += 1;
+  }
+
+  musicNodes = {
+    master,
+    padOscillators,
+    melodyTimer: window.setInterval(scheduleMelodyNote, noteLength * 1000),
+  };
+  scheduleMelodyNote();
   controls.musicButton.classList.add("is-active");
   controls.musicButton.textContent = "Звук вкл.";
   showToast("Мелодия включена");
@@ -526,7 +535,7 @@ function stopMusic() {
   for (const { oscillator } of musicNodes.padOscillators) {
     oscillator.stop(now + 0.8);
   }
-  musicNodes.melodyOscillator.stop(now + 0.8);
+  window.clearInterval(musicNodes.melodyTimer);
   musicNodes = null;
   controls.musicButton.classList.remove("is-active");
   controls.musicButton.textContent = "Музыка";
