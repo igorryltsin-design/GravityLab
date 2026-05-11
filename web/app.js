@@ -21,6 +21,7 @@ const controls = {
   resetButton: document.getElementById("resetButton"),
   presentationButton: document.getElementById("presentationButton"),
   exitPresentationButton: document.getElementById("exitPresentationButton"),
+  musicButton: document.getElementById("musicButton"),
   inspectorToggle: document.getElementById("inspectorToggle"),
   closeInspectorButton: document.getElementById("closeInspectorButton"),
   showButton: document.getElementById("showButton"),
@@ -120,6 +121,8 @@ const state = {
 };
 
 let toastTimer = 0;
+let audioContext = null;
+let musicNodes = null;
 
 function makeBody(seed, asteroid = false) {
   const [name, mass, radius, x, y, vx, vy, color] = seed;
@@ -434,6 +437,108 @@ function showToast(message) {
   toastTimer = window.setTimeout(() => controls.toast.classList.remove("is-visible"), 2600);
 }
 
+function createNoiseBuffer(context) {
+  const buffer = context.createBuffer(1, context.sampleRate * 2, context.sampleRate);
+  const data = buffer.getChannelData(0);
+  for (let i = 0; i < data.length; i += 1) {
+    data[i] = Math.random() * 2 - 1;
+  }
+  return buffer;
+}
+
+function startMusic() {
+  const AudioContext = window.AudioContext || window.webkitAudioContext;
+  if (!AudioContext) {
+    showToast("Музыка не поддерживается этим браузером");
+    return;
+  }
+
+  audioContext = audioContext || new AudioContext();
+  if (audioContext.state === "suspended") {
+    audioContext.resume();
+  }
+
+  const now = audioContext.currentTime;
+  const master = audioContext.createGain();
+  const filter = audioContext.createBiquadFilter();
+  const delay = audioContext.createDelay(4);
+  const feedback = audioContext.createGain();
+  const shimmer = audioContext.createGain();
+  const noise = audioContext.createBufferSource();
+  const noiseGain = audioContext.createGain();
+  const noiseFilter = audioContext.createBiquadFilter();
+  const oscillators = [
+    { frequency: 73.42, type: "sine", gain: 0.11, detune: -6 },
+    { frequency: 110.0, type: "triangle", gain: 0.075, detune: 5 },
+    { frequency: 146.83, type: "sine", gain: 0.05, detune: 2 },
+    { frequency: 220.0, type: "sine", gain: 0.035, detune: -9 },
+  ].map((config) => {
+    const oscillator = audioContext.createOscillator();
+    const gain = audioContext.createGain();
+    oscillator.type = config.type;
+    oscillator.frequency.value = config.frequency;
+    oscillator.detune.value = config.detune;
+    gain.gain.setValueAtTime(0, now);
+    gain.gain.linearRampToValueAtTime(config.gain, now + 1.8);
+    oscillator.connect(gain).connect(filter);
+    oscillator.start(now);
+    return { oscillator, gain };
+  });
+
+  filter.type = "lowpass";
+  filter.frequency.setValueAtTime(760, now);
+  filter.Q.value = 0.6;
+  delay.delayTime.value = 0.58;
+  feedback.gain.value = 0.26;
+  shimmer.gain.value = 0.18;
+  master.gain.setValueAtTime(0, now);
+  master.gain.linearRampToValueAtTime(0.32, now + 2);
+
+  noise.buffer = createNoiseBuffer(audioContext);
+  noise.loop = true;
+  noiseFilter.type = "lowpass";
+  noiseFilter.frequency.value = 420;
+  noiseGain.gain.setValueAtTime(0, now);
+  noiseGain.gain.linearRampToValueAtTime(0.012, now + 2.4);
+  noise.connect(noiseFilter).connect(noiseGain).connect(filter);
+  noise.start(now);
+
+  filter.connect(delay);
+  filter.connect(master);
+  delay.connect(feedback).connect(delay);
+  delay.connect(shimmer).connect(master);
+  master.connect(audioContext.destination);
+
+  musicNodes = { master, oscillators, noise, noiseGain };
+  controls.musicButton.classList.add("is-active");
+  controls.musicButton.textContent = "Звук вкл.";
+  showToast("Космическая музыка включена");
+}
+
+function stopMusic() {
+  if (!musicNodes || !audioContext) return;
+  const now = audioContext.currentTime;
+  musicNodes.master.gain.cancelScheduledValues(now);
+  musicNodes.master.gain.setValueAtTime(musicNodes.master.gain.value, now);
+  musicNodes.master.gain.linearRampToValueAtTime(0, now + 0.7);
+  for (const { oscillator } of musicNodes.oscillators) {
+    oscillator.stop(now + 0.8);
+  }
+  musicNodes.noise.stop(now + 0.8);
+  musicNodes = null;
+  controls.musicButton.classList.remove("is-active");
+  controls.musicButton.textContent = "Музыка";
+  showToast("Музыка выключена");
+}
+
+function toggleMusic() {
+  if (musicNodes) {
+    stopMusic();
+  } else {
+    startMusic();
+  }
+}
+
 function flashTransition(presetId, timestamp) {
   controls.transitionTitle.textContent = presetLabels[presetId] || presetId;
   controls.sceneTransition.classList.add("is-active");
@@ -606,6 +711,7 @@ controls.pauseButton.addEventListener("click", () => {
 controls.resetButton.addEventListener("click", resetSimulation);
 controls.presentationButton.addEventListener("click", () => setPresentationMode(!state.presentationMode));
 controls.exitPresentationButton.addEventListener("click", () => setPresentationMode(false));
+controls.musicButton.addEventListener("click", toggleMusic);
 controls.inspectorToggle.addEventListener("click", toggleInspector);
 controls.closeInspectorButton.addEventListener("click", () => document.body.classList.remove("inspector-open"));
 controls.showButton.addEventListener("click", toggleShow);
