@@ -332,19 +332,6 @@ function drawBackground() {
   ctx.fillStyle = gradient;
   ctx.fillRect(0, 0, width, height);
 
-  ctx.fillStyle = "rgba(238, 244, 255, 0.55)";
-  for (let i = 0; i < 130; i += 1) {
-    const drift = state.simTime * (0.003 + (i % 7) * 0.0007);
-    const x = ((Math.sin(i * 91.7 + drift) * 0.5 + 0.5) * width + state.simTime * (i % 3)) % width;
-    const y = ((Math.sin(i * 43.2 + 4 + drift) * 0.5 + 0.5) * height + state.simTime * 0.35) % height;
-    const r = (i % 5 === 0 ? 1.4 : 0.8) * (window.devicePixelRatio || 1);
-    ctx.globalAlpha = 0.25 + ((i * 17) % 50) / 100;
-    ctx.beginPath();
-    ctx.arc(x, y, r, 0, Math.PI * 2);
-    ctx.fill();
-  }
-  ctx.globalAlpha = 1;
-
   if (controls.preset.value === "chaos") {
     const pulse = 0.18 + Math.sin(state.simTime * 1.8) * 0.06;
     ctx.fillStyle = `rgba(255, 115, 138, ${pulse})`;

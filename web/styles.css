@@ -44,10 +44,7 @@ select {
   grid-template-columns: minmax(220px, 280px) minmax(0, 1fr) minmax(220px, 300px);
   width: 100vw;
   height: 100vh;
-  background:
-    radial-gradient(circle at 25% 18%, rgba(91, 139, 207, 0.22), transparent 30%),
-    radial-gradient(circle at 78% 70%, rgba(86, 214, 194, 0.12), transparent 28%),
-    linear-gradient(135deg, #080b12 0%, #111827 48%, #070a10 100%);
+  background: linear-gradient(135deg, #080b12 0%, #111827 48%, #070a10 100%);
 }
 
 .panel {
