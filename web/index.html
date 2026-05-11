@@ -27,8 +27,8 @@
             <option value="asteroid-belt">Пояс астероидов</option>
           </select>
           <div class="preset-buttons" aria-label="Быстрое переключение пресетов">
-            <button id="prevPresetButton" type="button">Назад</button>
-            <button id="nextPresetButton" type="button">Вперед</button>
+            <button id="prevPresetButton" type="button" aria-label="Предыдущий пресет">Пред.</button>
+            <button id="nextPresetButton" type="button" aria-label="Следующий пресет">След.</button>
           </div>
         </section>
 
@@ -48,6 +48,15 @@
           <input id="timeScale" type="range" min="0.1" max="4" step="0.1" value="1">
         </section>
 
+        <section class="control-group">
+          <label for="cameraMode">Камера</label>
+          <select id="cameraMode">
+            <option value="auto">Авто</option>
+            <option value="sun">Солнце</option>
+            <option value="selected">Выбранное тело</option>
+          </select>
+        </section>
+
         <section class="control-group toggles">
           <label><input id="toggleTrails" type="checkbox" checked> Следы</label>
           <label><input id="toggleGrid" type="checkbox" checked> Сетка</label>
@@ -63,6 +72,13 @@
           <button id="presentationButton" type="button">Презентация</button>
           <button id="inspectorToggle" type="button">Инспектор</button>
         </div>
+
+        <div class="button-row utility-row">
+          <button id="showButton" type="button">Шоу</button>
+          <button id="screenshotButton" type="button">Скриншот</button>
+        </div>
+
+        <button id="copyLinkButton" class="wide-button" type="button">Ссылка на сайт</button>
 
         <section class="qr-card" aria-label="Ссылка на сайт">
           <img src="./gravitylab-qr.svg" alt="QR-код сайта GravityLab">
@@ -81,6 +97,15 @@
           <span>GravityLab</span>
           <strong>Рыльцин Тимур 10А МОУ СОШ № 22</strong>
         </div>
+        <article class="scene-card" aria-live="polite">
+          <span id="sceneKicker">Демонстрация</span>
+          <h2 id="sceneTitle">Три орбиты</h2>
+          <p id="sceneDescription">Стабильные орбиты вокруг массивного центра.</p>
+        </article>
+        <div id="sceneTransition" class="scene-transition" aria-hidden="true">
+          <span>Следующая сцена</span>
+          <strong id="transitionTitle">Три орбиты</strong>
+        </div>
         <div class="hud top-hud">
           <span id="bodyCount">0 тел</span>
           <span id="activePreset">Три орбиты</span>
@@ -93,6 +118,7 @@
           <span>Клик: выбрать тело</span>
         </div>
         <button id="exitPresentationButton" class="exit-presentation" type="button">Выйти</button>
+        <div id="toast" class="toast" role="status" aria-live="polite"></div>
       </section>
 
       <aside class="panel right-panel" aria-label="Инспектор">

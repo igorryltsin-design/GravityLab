@@ -9,6 +9,7 @@ const controls = {
   preset: document.getElementById("preset"),
   prevPresetButton: document.getElementById("prevPresetButton"),
   nextPresetButton: document.getElementById("nextPresetButton"),
+  cameraMode: document.getElementById("cameraMode"),
   gravity: document.getElementById("gravity"),
   gravityValue: document.getElementById("gravityValue"),
   timeScale: document.getElementById("timeScale"),
@@ -22,10 +23,19 @@ const controls = {
   exitPresentationButton: document.getElementById("exitPresentationButton"),
   inspectorToggle: document.getElementById("inspectorToggle"),
   closeInspectorButton: document.getElementById("closeInspectorButton"),
+  showButton: document.getElementById("showButton"),
+  screenshotButton: document.getElementById("screenshotButton"),
+  copyLinkButton: document.getElementById("copyLinkButton"),
   bodyCount: document.getElementById("bodyCount"),
   activePreset: document.getElementById("activePreset"),
   simTime: document.getElementById("simTime"),
   energyState: document.getElementById("energyState"),
+  sceneKicker: document.getElementById("sceneKicker"),
+  sceneTitle: document.getElementById("sceneTitle"),
+  sceneDescription: document.getElementById("sceneDescription"),
+  sceneTransition: document.getElementById("sceneTransition"),
+  transitionTitle: document.getElementById("transitionTitle"),
+  toast: document.getElementById("toast"),
   selectedColor: document.getElementById("selectedColor"),
   selectedName: document.getElementById("selectedName"),
   selectedKind: document.getElementById("selectedKind"),
@@ -49,12 +59,21 @@ const colors = {
 };
 
 const presetOrder = ["three-orbits", "single-orbit", "chaos", "binary-giants", "asteroid-belt"];
+const showOrder = ["three-orbits", "chaos", "binary-giants", "asteroid-belt"];
+const siteUrl = "https://igorryltsin-design.github.io/GravityLab/";
 const presetLabels = {
   "three-orbits": "Три орбиты",
   "single-orbit": "Одна планета",
   chaos: "Хаос",
   "binary-giants": "Два гиганта",
   "asteroid-belt": "Пояс астероидов",
+};
+const presetDescriptions = {
+  "three-orbits": "Стабильные орбиты вокруг массивного центра.",
+  "single-orbit": "Одна планета показывает базовый принцип круговой орбиты.",
+  chaos: "Малое изменение траектории быстро меняет всю систему.",
+  "binary-giants": "Два массивных тела создают сложное поле притяжения.",
+  "asteroid-belt": "Множество малых тел движутся под влиянием планет.",
 };
 
 const presets = {
@@ -91,10 +110,17 @@ const state = {
   timeScale: 1,
   paused: false,
   presentationMode: false,
+  showMode: false,
+  showIndex: 0,
+  showStartedAt: 0,
+  showSceneStartedAt: 0,
+  transitionUntil: 0,
   simTime: 0,
   lastFrame: 0,
-  camera: { x: 0, y: 0, zoom: 1 },
+  camera: { x: 0, y: 0, zoom: 1, initialized: false },
 };
+
+let toastTimer = 0;
 
 function makeBody(seed, asteroid = false) {
   const [name, mass, radius, x, y, vx, vy, color] = seed;
@@ -140,7 +166,9 @@ function resetSimulation() {
   state.bodies = seeds.map((seed, index) => makeBody(seed, preset === "asteroid-belt" && index > 0 && index < seeds.length - 1));
   state.selected = Math.min(1, state.bodies.length - 1);
   state.simTime = 0;
+  state.camera.initialized = false;
   document.body.classList.remove("inspector-open");
+  updateSceneCopy();
 }
 
 function resizeCanvas() {
@@ -189,23 +217,86 @@ function step(dt) {
   state.simTime += dt;
 }
 
-function updateCamera() {
+function isMobileViewport() {
+  return window.matchMedia("(max-width: 900px)").matches;
+}
+
+function lerp(current, target, amount) {
+  return current + (target - current) * amount;
+}
+
+function cameraTargetForMode() {
   if (!state.bodies.length) return;
+  const mode = state.showMode ? "auto" : controls.cameraMode.value;
+  const focusBody =
+    mode === "selected"
+      ? state.bodies[state.selected]
+      : mode === "sun"
+        ? state.bodies[0]
+        : null;
+
+  let targetX = 0;
+  let targetY = 0;
+  if (focusBody) {
+    targetX = focusBody.x;
+    targetY = focusBody.y;
+  }
+
   const nonAsteroids = state.bodies.filter((body) => !body.asteroid);
   let maxRadius = 240;
-  for (const body of nonAsteroids) {
-    maxRadius = Math.max(maxRadius, Math.hypot(body.x, body.y) + 120);
+  if (mode === "auto") {
+    for (const body of nonAsteroids) {
+      maxRadius = Math.max(maxRadius, Math.hypot(body.x, body.y) + 120);
+    }
+  } else {
+    for (const body of nonAsteroids) {
+      maxRadius = Math.max(maxRadius, Math.hypot(body.x - targetX, body.y - targetY) + 180);
+    }
   }
+
   const width = canvas.clientWidth || 1;
   const height = canvas.clientHeight || 1;
-  state.camera.zoom = Math.min(width, height) / (maxRadius * 2);
-  state.camera.zoom = Math.max(0.45, Math.min(1.6, state.camera.zoom));
+  let zoom = Math.min(width, height) / (maxRadius * 2);
+  zoom = Math.max(isMobileViewport() ? 0.34 : 0.45, Math.min(1.8, zoom));
+
+  if (state.showMode) {
+    const pulse = Math.sin(state.simTime * 0.42) * 0.08 + Math.sin(state.simTime * 0.17) * 0.05;
+    zoom *= 1 + pulse;
+  }
+
+  return { x: targetX, y: targetY, zoom };
+}
+
+function updateCamera() {
+  const target = cameraTargetForMode();
+  if (!target) return;
+  if (!state.camera.initialized) {
+    state.camera.x = target.x;
+    state.camera.y = target.y;
+    state.camera.zoom = target.zoom;
+    state.camera.initialized = true;
+    return;
+  }
+
+  const smooth = state.showMode ? 0.035 : 0.08;
+  state.camera.x = lerp(state.camera.x, target.x, smooth);
+  state.camera.y = lerp(state.camera.y, target.y, smooth);
+  state.camera.zoom = lerp(state.camera.zoom, target.zoom, smooth);
 }
 
 function worldToScreen(x, y) {
   return {
     x: canvas.clientWidth / 2 + (x - state.camera.x) * state.camera.zoom,
     y: canvas.clientHeight / 2 + (y - state.camera.y) * state.camera.zoom,
+  };
+}
+
+function hexToRgb(hex) {
+  const value = hex.replace("#", "");
+  return {
+    r: parseInt(value.slice(0, 2), 16),
+    g: parseInt(value.slice(2, 4), 16),
+    b: parseInt(value.slice(4, 6), 16),
   };
 }
 
@@ -243,8 +334,9 @@ function drawBackground() {
 
   ctx.fillStyle = "rgba(238, 244, 255, 0.55)";
   for (let i = 0; i < 130; i += 1) {
-    const x = (Math.sin(i * 91.7) * 0.5 + 0.5) * width;
-    const y = (Math.sin(i * 43.2 + 4) * 0.5 + 0.5) * height;
+    const drift = state.simTime * (0.003 + (i % 7) * 0.0007);
+    const x = ((Math.sin(i * 91.7 + drift) * 0.5 + 0.5) * width + state.simTime * (i % 3)) % width;
+    const y = ((Math.sin(i * 43.2 + 4 + drift) * 0.5 + 0.5) * height + state.simTime * 0.35) % height;
     const r = (i % 5 === 0 ? 1.4 : 0.8) * (window.devicePixelRatio || 1);
     ctx.globalAlpha = 0.25 + ((i * 17) % 50) / 100;
     ctx.beginPath();
@@ -252,21 +344,32 @@ function drawBackground() {
     ctx.fill();
   }
   ctx.globalAlpha = 1;
+
+  if (controls.preset.value === "chaos") {
+    const pulse = 0.18 + Math.sin(state.simTime * 1.8) * 0.06;
+    ctx.fillStyle = `rgba(255, 115, 138, ${pulse})`;
+    ctx.fillRect(0, 0, width, height);
+  }
 }
 
 function drawTrails() {
   if (!controls.trails.checked) return;
   for (const body of state.bodies) {
     if (body.trail.length < 2) continue;
-    ctx.strokeStyle = body.asteroid ? "rgba(154, 169, 192, 0.22)" : `${body.color}99`;
-    ctx.lineWidth = body.asteroid ? 1 : 1.5;
-    ctx.beginPath();
-    for (let i = 0; i < body.trail.length; i += 1) {
+    const rgb = hexToRgb(body.color);
+    const step = body.asteroid ? 3 : 1;
+    for (let i = step; i < body.trail.length; i += step) {
+      const prev = worldToScreen(body.trail[i - step][0], body.trail[i - step][1]);
       const point = worldToScreen(body.trail[i][0], body.trail[i][1]);
-      if (i === 0) ctx.moveTo(point.x, point.y);
-      else ctx.lineTo(point.x, point.y);
+      const age = i / body.trail.length;
+      const alpha = body.asteroid ? 0.04 + age * 0.18 : 0.05 + age * 0.58;
+      ctx.strokeStyle = `rgba(${rgb.r}, ${rgb.g}, ${rgb.b}, ${alpha})`;
+      ctx.lineWidth = (body.asteroid ? 0.8 : 1.1 + age * 2.2) * Math.max(0.7, state.camera.zoom);
+      ctx.beginPath();
+      ctx.moveTo(prev.x, prev.y);
+      ctx.lineTo(point.x, point.y);
+      ctx.stroke();
     }
-    ctx.stroke();
   }
 }
 
@@ -275,9 +378,20 @@ function drawBodies() {
     const body = state.bodies[i];
     const point = worldToScreen(body.x, body.y);
     const radius = Math.max(1.4, body.radius * state.camera.zoom);
+    if (i === 0 || body.mass > 100000) {
+      const halo = ctx.createRadialGradient(point.x, point.y, 0, point.x, point.y, radius * 7.5);
+      halo.addColorStop(0, `${body.color}70`);
+      halo.addColorStop(0.4, `${body.color}22`);
+      halo.addColorStop(1, `${body.color}00`);
+      ctx.fillStyle = halo;
+      ctx.beginPath();
+      ctx.arc(point.x, point.y, radius * 7.5, 0, Math.PI * 2);
+      ctx.fill();
+    }
+
     ctx.save();
     ctx.shadowColor = body.color;
-    ctx.shadowBlur = body.asteroid ? 4 : 18;
+    ctx.shadowBlur = i === state.selected ? 34 : body.asteroid ? 4 : 22;
     ctx.fillStyle = body.color;
     ctx.beginPath();
     ctx.arc(point.x, point.y, radius, 0, Math.PI * 2);
@@ -285,10 +399,11 @@ function drawBodies() {
     ctx.restore();
 
     if (i === state.selected) {
+      const pulse = 1 + Math.sin(state.simTime * 3.2) * 0.16;
       ctx.strokeStyle = "rgba(86, 214, 194, 0.92)";
       ctx.lineWidth = 2;
       ctx.beginPath();
-      ctx.arc(point.x, point.y, radius + 8, 0, Math.PI * 2);
+      ctx.arc(point.x, point.y, radius + 8 * pulse, 0, Math.PI * 2);
       ctx.stroke();
     }
 
@@ -323,16 +438,101 @@ function renderSparkline(body) {
   sparkCtx.stroke();
 }
 
+function updateSceneCopy() {
+  const presetId = controls.preset.value;
+  controls.sceneTitle.textContent = presetLabels[presetId] || presetId;
+  controls.sceneDescription.textContent = presetDescriptions[presetId] || "";
+  controls.sceneKicker.textContent = state.showMode ? "Шоу-режим" : "Демонстрация";
+  controls.transitionTitle.textContent = presetLabels[presetId] || presetId;
+}
+
+function showToast(message) {
+  window.clearTimeout(toastTimer);
+  controls.toast.textContent = message;
+  controls.toast.classList.add("is-visible");
+  toastTimer = window.setTimeout(() => controls.toast.classList.remove("is-visible"), 2600);
+}
+
+function flashTransition(presetId, timestamp) {
+  controls.transitionTitle.textContent = presetLabels[presetId] || presetId;
+  controls.sceneTransition.classList.add("is-active");
+  state.transitionUntil = timestamp + 1500;
+}
+
+function updateShow(timestamp) {
+  if (!state.showMode) return;
+  const sceneDuration = 13000;
+  if (timestamp - state.showSceneStartedAt < sceneDuration) return;
+  state.showIndex = (state.showIndex + 1) % showOrder.length;
+  const nextPreset = showOrder[state.showIndex];
+  setPreset(nextPreset);
+  state.showSceneStartedAt = timestamp;
+  flashTransition(nextPreset, timestamp);
+}
+
+function startShow(timestamp = performance.now()) {
+  state.showMode = true;
+  state.showIndex = 0;
+  state.showStartedAt = timestamp;
+  state.showSceneStartedAt = timestamp;
+  state.paused = false;
+  controls.timeScale.value = "1.4";
+  state.timeScale = 1.4;
+  controls.cameraMode.value = "auto";
+  setPresentationMode(true);
+  setPreset(showOrder[state.showIndex]);
+  flashTransition(showOrder[state.showIndex], timestamp);
+}
+
+function stopShow() {
+  state.showMode = false;
+  controls.sceneTransition.classList.remove("is-active");
+  state.transitionUntil = 0;
+  updateSceneCopy();
+}
+
+function toggleShow() {
+  if (state.showMode) {
+    stopShow();
+    setPresentationMode(false);
+  } else {
+    startShow();
+  }
+}
+
+function saveScreenshot() {
+  const link = document.createElement("a");
+  const presetId = controls.preset.value;
+  link.download = `gravitylab-${presetId}.png`;
+  link.href = canvas.toDataURL("image/png");
+  link.click();
+  showToast("Скриншот сохранен");
+}
+
+async function copySiteLink() {
+  try {
+    await navigator.clipboard.writeText(siteUrl);
+    showToast("Ссылка скопирована");
+  } catch {
+    showToast(`Ссылка: ${siteUrl}`);
+  }
+}
+
 function updateUi() {
   const body = state.bodies[state.selected] || state.bodies[0];
   controls.gravityValue.value = Number(state.gravity).toFixed(2);
   controls.timeScaleValue.value = `${Number(state.timeScale).toFixed(1)}x`;
   controls.pauseButton.textContent = state.paused ? "Старт" : "Пауза";
   controls.presentationButton.textContent = state.presentationMode ? "Обычный вид" : "Презентация";
+  controls.showButton.textContent = state.showMode ? "Стоп" : "Шоу";
   controls.bodyCount.textContent = `${state.bodies.length} тел`;
   controls.activePreset.textContent = presetLabels[controls.preset.value] || controls.preset.value;
   controls.simTime.textContent = `t=${state.simTime.toFixed(1)}`;
-  controls.energyState.textContent = state.paused ? "пауза" : "идет";
+  controls.energyState.textContent = state.showMode ? "шоу" : state.paused ? "пауза" : "идет";
+  if (state.transitionUntil && performance.now() > state.transitionUntil) {
+    controls.sceneTransition.classList.remove("is-active");
+    state.transitionUntil = 0;
+  }
 
   if (!body) return;
   const speed = Math.hypot(body.vx, body.vy);
@@ -360,6 +560,7 @@ function render() {
 function tick(timestamp) {
   const elapsed = Math.min(48, timestamp - (state.lastFrame || timestamp));
   state.lastFrame = timestamp;
+  updateShow(timestamp);
   if (!state.paused) {
     const dt = 0.018 * state.timeScale * elapsed;
     const substeps = Math.max(1, Math.ceil(state.timeScale * 2));
@@ -399,9 +600,13 @@ function shiftPreset(direction) {
 }
 
 function setPresentationMode(enabled) {
+  if (!enabled && state.showMode) {
+    stopShow();
+  }
   state.presentationMode = enabled;
   document.body.classList.toggle("presentation-mode", enabled);
   document.body.classList.remove("inspector-open");
+  updateSceneCopy();
   window.setTimeout(resizeCanvas, 60);
 }
 
@@ -414,6 +619,9 @@ function toggleInspector() {
 controls.preset.addEventListener("change", () => setPreset(controls.preset.value));
 controls.prevPresetButton.addEventListener("click", () => shiftPreset(-1));
 controls.nextPresetButton.addEventListener("click", () => shiftPreset(1));
+controls.cameraMode.addEventListener("change", () => {
+  state.camera.initialized = false;
+});
 controls.gravity.addEventListener("input", () => {
   state.gravity = Number(controls.gravity.value);
 });
@@ -428,6 +636,9 @@ controls.presentationButton.addEventListener("click", () => setPresentationMode(
 controls.exitPresentationButton.addEventListener("click", () => setPresentationMode(false));
 controls.inspectorToggle.addEventListener("click", toggleInspector);
 controls.closeInspectorButton.addEventListener("click", () => document.body.classList.remove("inspector-open"));
+controls.showButton.addEventListener("click", toggleShow);
+controls.screenshotButton.addEventListener("click", saveScreenshot);
+controls.copyLinkButton.addEventListener("click", copySiteLink);
 canvas.addEventListener("click", (event) => selectAt(event.clientX, event.clientY));
 window.addEventListener("resize", () => {
   if (!window.matchMedia("(max-width: 900px)").matches) {
@@ -442,9 +653,11 @@ window.addEventListener("keydown", (event) => {
   }
   if (event.key.toLowerCase() === "r") resetSimulation();
   if (event.key.toLowerCase() === "p") setPresentationMode(!state.presentationMode);
+  if (event.key.toLowerCase() === "s") toggleShow();
   if (event.key === "ArrowLeft") shiftPreset(-1);
   if (event.key === "ArrowRight") shiftPreset(1);
   if (event.key === "Escape") {
+    stopShow();
     setPresentationMode(false);
     document.body.classList.remove("inspector-open");
   }
