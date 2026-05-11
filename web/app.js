@@ -106,7 +106,7 @@ const state = {
   bodies: [],
   selected: 1,
   gravity: 1,
-  timeScale: 1,
+  timeScale: 0.5,
   paused: false,
   presentationMode: false,
   showMode: false,
@@ -457,8 +457,8 @@ function startShow(timestamp = performance.now()) {
   state.showStartedAt = timestamp;
   state.showSceneStartedAt = timestamp;
   state.paused = false;
-  controls.timeScale.value = "1.4";
-  state.timeScale = 1.4;
+  controls.timeScale.value = "0.7";
+  state.timeScale = 0.7;
   controls.cameraMode.value = "auto";
   setPresentationMode(true);
   setPreset(showOrder[state.showIndex]);
