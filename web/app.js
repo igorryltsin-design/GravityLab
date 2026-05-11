@@ -7,6 +7,8 @@ const sparkCtx = sparkline.getContext("2d");
 
 const controls = {
   preset: document.getElementById("preset"),
+  prevPresetButton: document.getElementById("prevPresetButton"),
+  nextPresetButton: document.getElementById("nextPresetButton"),
   gravity: document.getElementById("gravity"),
   gravityValue: document.getElementById("gravityValue"),
   timeScale: document.getElementById("timeScale"),
@@ -16,7 +18,12 @@ const controls = {
   labels: document.getElementById("toggleLabels"),
   pauseButton: document.getElementById("pauseButton"),
   resetButton: document.getElementById("resetButton"),
+  presentationButton: document.getElementById("presentationButton"),
+  exitPresentationButton: document.getElementById("exitPresentationButton"),
+  inspectorToggle: document.getElementById("inspectorToggle"),
+  closeInspectorButton: document.getElementById("closeInspectorButton"),
   bodyCount: document.getElementById("bodyCount"),
+  activePreset: document.getElementById("activePreset"),
   simTime: document.getElementById("simTime"),
   energyState: document.getElementById("energyState"),
   selectedColor: document.getElementById("selectedColor"),
@@ -39,6 +46,15 @@ const colors = {
   teal: "#56d6c2",
   violet: "#a88cff",
   asteroid: "#9aa9c0",
+};
+
+const presetOrder = ["three-orbits", "single-orbit", "chaos", "binary-giants", "asteroid-belt"];
+const presetLabels = {
+  "three-orbits": "Три орбиты",
+  "single-orbit": "Одна планета",
+  chaos: "Хаос",
+  "binary-giants": "Два гиганта",
+  "asteroid-belt": "Пояс астероидов",
 };
 
 const presets = {
@@ -74,6 +90,7 @@ const state = {
   gravity: 1,
   timeScale: 1,
   paused: false,
+  presentationMode: false,
   simTime: 0,
   lastFrame: 0,
   camera: { x: 0, y: 0, zoom: 1 },
@@ -123,6 +140,7 @@ function resetSimulation() {
   state.bodies = seeds.map((seed, index) => makeBody(seed, preset === "asteroid-belt" && index > 0 && index < seeds.length - 1));
   state.selected = Math.min(1, state.bodies.length - 1);
   state.simTime = 0;
+  document.body.classList.remove("inspector-open");
 }
 
 function resizeCanvas() {
@@ -310,9 +328,11 @@ function updateUi() {
   controls.gravityValue.value = Number(state.gravity).toFixed(2);
   controls.timeScaleValue.value = `${Number(state.timeScale).toFixed(1)}x`;
   controls.pauseButton.textContent = state.paused ? "Старт" : "Пауза";
+  controls.presentationButton.textContent = state.presentationMode ? "Обычный вид" : "Презентация";
   controls.bodyCount.textContent = `${state.bodies.length} тел`;
+  controls.activePreset.textContent = presetLabels[controls.preset.value] || controls.preset.value;
   controls.simTime.textContent = `t=${state.simTime.toFixed(1)}`;
-  controls.energyState.textContent = state.paused ? "paused" : "running";
+  controls.energyState.textContent = state.paused ? "пауза" : "идет";
 
   if (!body) return;
   const speed = Math.hypot(body.vx, body.vy);
@@ -366,7 +386,34 @@ function selectAt(clientX, clientY) {
   if (best >= 0) state.selected = best;
 }
 
-controls.preset.addEventListener("change", resetSimulation);
+function setPreset(presetId) {
+  if (!presetOrder.includes(presetId)) return;
+  controls.preset.value = presetId;
+  resetSimulation();
+}
+
+function shiftPreset(direction) {
+  const currentIndex = Math.max(0, presetOrder.indexOf(controls.preset.value));
+  const nextIndex = (currentIndex + direction + presetOrder.length) % presetOrder.length;
+  setPreset(presetOrder[nextIndex]);
+}
+
+function setPresentationMode(enabled) {
+  state.presentationMode = enabled;
+  document.body.classList.toggle("presentation-mode", enabled);
+  document.body.classList.remove("inspector-open");
+  window.setTimeout(resizeCanvas, 60);
+}
+
+function toggleInspector() {
+  if (window.matchMedia("(max-width: 900px)").matches) {
+    document.body.classList.toggle("inspector-open");
+  }
+}
+
+controls.preset.addEventListener("change", () => setPreset(controls.preset.value));
+controls.prevPresetButton.addEventListener("click", () => shiftPreset(-1));
+controls.nextPresetButton.addEventListener("click", () => shiftPreset(1));
 controls.gravity.addEventListener("input", () => {
   state.gravity = Number(controls.gravity.value);
 });
@@ -377,14 +424,30 @@ controls.pauseButton.addEventListener("click", () => {
   state.paused = !state.paused;
 });
 controls.resetButton.addEventListener("click", resetSimulation);
+controls.presentationButton.addEventListener("click", () => setPresentationMode(!state.presentationMode));
+controls.exitPresentationButton.addEventListener("click", () => setPresentationMode(false));
+controls.inspectorToggle.addEventListener("click", toggleInspector);
+controls.closeInspectorButton.addEventListener("click", () => document.body.classList.remove("inspector-open"));
 canvas.addEventListener("click", (event) => selectAt(event.clientX, event.clientY));
-window.addEventListener("resize", resizeCanvas);
+window.addEventListener("resize", () => {
+  if (!window.matchMedia("(max-width: 900px)").matches) {
+    document.body.classList.remove("inspector-open");
+  }
+  resizeCanvas();
+});
 window.addEventListener("keydown", (event) => {
   if (event.code === "Space") {
     event.preventDefault();
     state.paused = !state.paused;
   }
   if (event.key.toLowerCase() === "r") resetSimulation();
+  if (event.key.toLowerCase() === "p") setPresentationMode(!state.presentationMode);
+  if (event.key === "ArrowLeft") shiftPreset(-1);
+  if (event.key === "ArrowRight") shiftPreset(1);
+  if (event.key === "Escape") {
+    setPresentationMode(false);
+    document.body.classList.remove("inspector-open");
+  }
 });
 
 resizeCanvas();

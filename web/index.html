@@ -26,6 +26,10 @@
             <option value="binary-giants">Два гиганта</option>
             <option value="asteroid-belt">Пояс астероидов</option>
           </select>
+          <div class="preset-buttons" aria-label="Быстрое переключение пресетов">
+            <button id="prevPresetButton" type="button">Назад</button>
+            <button id="nextPresetButton" type="button">Вперед</button>
+          </div>
         </section>
 
         <section class="control-group">
@@ -54,12 +58,32 @@
           <button id="pauseButton" type="button">Пауза</button>
           <button id="resetButton" type="button">Сброс</button>
         </div>
+
+        <div class="button-row utility-row">
+          <button id="presentationButton" type="button">Презентация</button>
+          <button id="inspectorToggle" type="button">Инспектор</button>
+        </div>
+
+        <section class="qr-card" aria-label="Ссылка на сайт">
+          <img src="./gravitylab-qr.svg" alt="QR-код сайта GravityLab">
+          <div>
+            <strong>Открыть на телефоне</strong>
+            <a href="https://igorryltsin-design.github.io/GravityLab/" target="_blank" rel="noreferrer">
+              igorryltsin-design.github.io/GravityLab/
+            </a>
+          </div>
+        </section>
       </aside>
 
       <section class="stage" aria-label="Сцена симуляции">
         <canvas id="spaceCanvas"></canvas>
+        <div class="presentation-brand" aria-hidden="true">
+          <span>GravityLab</span>
+          <strong>Рыльцин Тимур 10А МОУ СОШ № 22</strong>
+        </div>
         <div class="hud top-hud">
           <span id="bodyCount">0 тел</span>
+          <span id="activePreset">Три орбиты</span>
           <span id="simTime">t=0.0</span>
           <span id="energyState">stable</span>
         </div>
@@ -68,10 +92,14 @@
           <span>R: сброс</span>
           <span>Клик: выбрать тело</span>
         </div>
+        <button id="exitPresentationButton" class="exit-presentation" type="button">Выйти</button>
       </section>
 
       <aside class="panel right-panel" aria-label="Инспектор">
-        <h2>Инспектор</h2>
+        <div class="inspector-head">
+          <h2>Инспектор</h2>
+          <button id="closeInspectorButton" type="button" aria-label="Закрыть инспектор">Закрыть</button>
+        </div>
         <div class="selected-card">
           <span id="selectedColor" class="selected-dot"></span>
           <div>
