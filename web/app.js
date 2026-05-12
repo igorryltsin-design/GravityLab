@@ -290,7 +290,7 @@ function updateCamera() {
     return;
   }
 
-  const smooth = state.showMode ? 0.035 : 0.08;
+  const smooth = state.experimentMode ? 0.45 : state.showMode ? 0.035 : 0.08;
   state.camera.x = lerp(state.camera.x, target.x, smooth);
   state.camera.y = lerp(state.camera.y, target.y, smooth);
   state.camera.zoom = lerp(state.camera.zoom, target.zoom, smooth);
@@ -752,15 +752,22 @@ function tick(timestamp) {
 function velocityFromDrag(start, end) {
   const dx = end.x - start.x;
   const dy = end.y - start.y;
+  const limitVelocity = (velocity) => {
+    const speed = Math.hypot(velocity.vx, velocity.vy);
+    const maxSpeed = 45;
+    if (speed <= maxSpeed) return velocity;
+    const scale = maxSpeed / speed;
+    return { vx: velocity.vx * scale, vy: velocity.vy * scale };
+  };
   if (Math.hypot(dx, dy) > 18) {
-    return { vx: dx * 0.14, vy: dy * 0.14 };
+    return limitVelocity({ vx: dx * 0.05, vy: dy * 0.05 });
   }
   const radius = Math.max(120, Math.hypot(start.x, start.y));
   const speed = Math.sqrt((state.gravity * 332946) / radius) * 1.08;
-  return {
+  return limitVelocity({
     vx: (-start.y / radius) * speed,
     vy: (start.x / radius) * speed,
-  };
+  });
 }
 
 function addManualPlanet(start, end) {
