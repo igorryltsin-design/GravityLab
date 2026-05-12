@@ -632,7 +632,7 @@ function startShow(timestamp = performance.now()) {
   state.paused = false;
   controls.timeScale.value = "0.7";
   state.timeScale = 0.7;
-  controls.cameraMode.value = "sun";
+  controls.cameraMode.value = "auto";
   setPresentationMode(true);
   setPreset(showOrder[state.showIndex]);
   flashTransition(showOrder[state.showIndex], timestamp);
@@ -664,7 +664,7 @@ function setExperimentMode(enabled, silent = false) {
     if (state.showMode) stopShow();
     setPresentationMode(false);
     state.paused = false;
-    controls.cameraMode.value = "sun";
+    controls.cameraMode.value = "auto";
     state.camera.initialized = false;
     if (!silent) showToast("Кликните по пустому месту, чтобы добавить планету");
   }
