@@ -273,11 +273,6 @@ function cameraTargetForMode() {
   let zoom = Math.min(width, height) / (maxRadius * 2);
   zoom = Math.max(isMobileViewport() ? 0.34 : 0.45, Math.min(1.8, zoom));
 
-  if (state.showMode) {
-    const pulse = Math.sin(state.simTime * 0.42) * 0.08 + Math.sin(state.simTime * 0.17) * 0.05;
-    zoom *= 1 + pulse;
-  }
-
   return { x: targetX, y: targetY, zoom };
 }
 
