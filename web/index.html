@@ -4,7 +4,7 @@
     <meta charset="utf-8">
     <meta name="viewport" content="width=device-width, initial-scale=1">
     <title>GravityLab Web</title>
-    <link rel="stylesheet" href="./styles.css?v=mobile-button-rows">
+    <link rel="stylesheet" href="./styles.css?v=mobile-quick-row">
   </head>
   <body>
     <main class="app-shell">
@@ -17,7 +17,7 @@
           </div>
         </div>
 
-        <section class="control-group">
+        <section class="control-group preset-control">
           <label for="preset">Пресет</label>
           <select id="preset">
             <option value="three-orbits">Три орбиты</option>
@@ -31,6 +31,11 @@
             <button id="nextPresetButton" type="button" aria-label="Следующий пресет">След.</button>
           </div>
         </section>
+
+        <div class="button-row primary-action-row">
+          <button id="pauseButton" type="button">Пауза</button>
+          <button id="resetButton" type="button">Сброс</button>
+        </div>
 
         <section class="control-group">
           <div class="row-label">
@@ -62,11 +67,6 @@
           <label><input id="toggleGrid" type="checkbox" checked> Сетка</label>
           <label><input id="toggleLabels" type="checkbox" checked> Подписи</label>
         </section>
-
-        <div class="button-row">
-          <button id="pauseButton" type="button">Пауза</button>
-          <button id="resetButton" type="button">Сброс</button>
-        </div>
 
         <div class="button-row utility-row secondary-row">
           <button id="presentationButton" type="button">Презентация</button>

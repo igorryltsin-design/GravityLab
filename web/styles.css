@@ -605,7 +605,7 @@ body.presentation-mode .top-hud {
     bottom: 0;
     z-index: 8;
     display: grid;
-    grid-template-columns: 1fr;
+    grid-template-columns: repeat(4, minmax(0, 1fr));
     gap: 8px;
     max-height: var(--mobile-controls-height);
     padding: 14px max(14px, env(safe-area-inset-left)) calc(14px + env(safe-area-inset-bottom)) max(14px, env(safe-area-inset-right));
@@ -620,6 +620,12 @@ body.presentation-mode .top-hud {
   .brand {
     grid-column: 1 / -1;
     margin-bottom: 0;
+  }
+
+  .control-group,
+  .button-row,
+  .utility-row {
+    grid-column: 1 / -1;
   }
 
   .brand-mark {
@@ -653,6 +659,25 @@ body.presentation-mode .top-hud {
   .button-row {
     gap: 8px;
     grid-template-columns: 1fr 1fr;
+  }
+
+  .preset-control,
+  .preset-buttons,
+  .primary-action-row {
+    display: contents;
+  }
+
+  .preset-control > label,
+  .preset-control > select {
+    grid-column: 1 / -1;
+  }
+
+  .preset-buttons > button,
+  .primary-action-row > button {
+    grid-column: auto;
+    min-height: 40px;
+    padding: 0 6px;
+    font-size: 13px;
   }
 
   .toggles {
@@ -837,7 +862,10 @@ body.presentation-mode .top-hud {
   }
 
   body.experiment-mode .brand,
-  body.experiment-mode .left-panel .control-group,
+  body.experiment-mode .left-panel .control-group:not(.preset-control),
+  body.experiment-mode .preset-control > label,
+  body.experiment-mode .preset-control > select,
+  body.experiment-mode .preset-buttons,
   body.experiment-mode .secondary-row,
   body.experiment-mode #showButton {
     display: none;
