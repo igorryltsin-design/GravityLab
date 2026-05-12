@@ -199,6 +199,20 @@ input[type="range"] {
   background: rgba(86, 214, 194, 0.16);
 }
 
+#experimentButton {
+  border-color: rgba(168, 140, 255, 0.65);
+  background: rgba(168, 140, 255, 0.14);
+}
+
+body.experiment-mode #experimentButton {
+  border-color: rgba(244, 199, 93, 0.85);
+  background: rgba(244, 199, 93, 0.16);
+}
+
+.wide-button {
+  margin-top: 10px;
+}
+
 .stage {
   position: relative;
   min-width: 0;
@@ -209,7 +223,7 @@ input[type="range"] {
   display: block;
   width: 100%;
   height: 100%;
-  touch-action: manipulation;
+  touch-action: none;
 }
 
 .presentation-brand {
@@ -318,6 +332,30 @@ input[type="range"] {
   line-height: 0.95;
   letter-spacing: 0;
   text-shadow: 0 0 40px rgba(86, 214, 194, 0.38);
+}
+
+.experiment-hint {
+  position: absolute;
+  left: 50%;
+  top: 84px;
+  z-index: 4;
+  display: none;
+  max-width: min(520px, calc(100% - 32px));
+  padding: 10px 13px;
+  border: 1px solid rgba(168, 140, 255, 0.38);
+  border-radius: 8px;
+  background: rgba(8, 11, 18, 0.72);
+  color: rgba(238, 244, 255, 0.92);
+  text-align: center;
+  font-size: 13px;
+  line-height: 1.35;
+  pointer-events: none;
+  transform: translateX(-50%);
+  backdrop-filter: blur(12px);
+}
+
+body.experiment-mode .experiment-hint {
+  display: block;
 }
 
 .hud {
@@ -486,6 +524,26 @@ input[type="range"] {
   background: rgba(255, 255, 255, 0.04);
 }
 
+.body-editor {
+  display: grid;
+  gap: 10px;
+  margin: 0 0 18px;
+  padding: 14px;
+  border: 1px solid var(--panel-border);
+  border-radius: 8px;
+  background: rgba(255, 255, 255, 0.04);
+}
+
+.body-editor input:disabled {
+  opacity: 0.45;
+}
+
+.editor-hint {
+  color: var(--muted);
+  font-size: 12px;
+  line-height: 1.35;
+}
+
 body.presentation-mode .left-panel,
 body.presentation-mode .right-panel,
 body.presentation-mode .bottom-hud {
@@ -621,6 +679,10 @@ body.presentation-mode .top-hud {
     margin-top: 0;
   }
 
+  .wide-button {
+    margin-top: 0;
+  }
+
   .hud {
     left: 10px;
     right: 10px;
@@ -742,6 +804,11 @@ body.presentation-mode .top-hud {
     font-size: 12px;
   }
 
+  .experiment-hint {
+    top: 104px;
+    font-size: 12px;
+  }
+
   .toast {
     bottom: calc(var(--mobile-controls-height) + 16px);
   }
@@ -788,5 +855,9 @@ body.presentation-mode .top-hud {
 
   .right-panel {
     bottom: calc(var(--mobile-controls-height) + 10px);
+  }
+
+  .body-editor {
+    padding: 12px;
   }
 }

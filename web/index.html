@@ -75,8 +75,9 @@
 
         <div class="button-row utility-row">
           <button id="showButton" type="button">Шоу</button>
-          <button id="copyLinkButton" type="button">Ссылка</button>
+          <button id="experimentButton" type="button">Эксперимент</button>
         </div>
+        <button id="copyLinkButton" class="wide-button" type="button">Ссылка</button>
       </aside>
 
       <section class="stage" aria-label="Сцена симуляции">
@@ -93,6 +94,9 @@
         <div id="sceneTransition" class="scene-transition" aria-hidden="true">
           <span>Следующая сцена</span>
           <strong id="transitionTitle">Три орбиты</strong>
+        </div>
+        <div id="experimentHint" class="experiment-hint" aria-live="polite">
+          Кликните по сцене, чтобы добавить планету
         </div>
         <div class="hud top-hud">
           <span id="bodyCount">0 тел</span>
@@ -128,6 +132,19 @@
           <div><dt>Радиус орбиты</dt><dd id="selectedRadius">0</dd></div>
           <div><dt>Координаты</dt><dd id="selectedPosition">0, 0</dd></div>
         </dl>
+        <section class="body-editor" aria-label="Редактирование выбранного тела">
+          <div class="row-label">
+            <label for="massControl">Масса</label>
+            <output id="massControlValue">0</output>
+          </div>
+          <input id="massControl" type="range" min="0.1" max="400" step="0.1" value="1">
+          <div class="row-label">
+            <label for="speedControl">Скорость</label>
+            <output id="speedControlValue">0</output>
+          </div>
+          <input id="speedControl" type="range" min="0" max="90" step="0.5" value="0">
+          <p id="editorHint" class="editor-hint">Выберите планету, чтобы менять массу и скорость.</p>
+        </section>
         <canvas id="sparkline" width="320" height="96" aria-label="График скорости"></canvas>
       </aside>
     </main>

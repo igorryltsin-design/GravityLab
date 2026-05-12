@@ -25,6 +25,7 @@ const controls = {
   inspectorToggle: document.getElementById("inspectorToggle"),
   closeInspectorButton: document.getElementById("closeInspectorButton"),
   showButton: document.getElementById("showButton"),
+  experimentButton: document.getElementById("experimentButton"),
   copyLinkButton: document.getElementById("copyLinkButton"),
   bodyCount: document.getElementById("bodyCount"),
   activePreset: document.getElementById("activePreset"),
@@ -35,6 +36,7 @@ const controls = {
   sceneDescription: document.getElementById("sceneDescription"),
   sceneTransition: document.getElementById("sceneTransition"),
   transitionTitle: document.getElementById("transitionTitle"),
+  experimentHint: document.getElementById("experimentHint"),
   toast: document.getElementById("toast"),
   selectedColor: document.getElementById("selectedColor"),
   selectedName: document.getElementById("selectedName"),
@@ -43,6 +45,11 @@ const controls = {
   selectedSpeed: document.getElementById("selectedSpeed"),
   selectedRadius: document.getElementById("selectedRadius"),
   selectedPosition: document.getElementById("selectedPosition"),
+  massControl: document.getElementById("massControl"),
+  massControlValue: document.getElementById("massControlValue"),
+  speedControl: document.getElementById("speedControl"),
+  speedControlValue: document.getElementById("speedControlValue"),
+  editorHint: document.getElementById("editorHint"),
 };
 
 const colors = {
@@ -111,6 +118,11 @@ const state = {
   paused: false,
   presentationMode: false,
   showMode: false,
+  experimentMode: false,
+  draggingNewBody: false,
+  dragStartWorld: null,
+  dragCurrentWorld: null,
+  manualBodyCount: 0,
   showIndex: 0,
   showStartedAt: 0,
   showSceneStartedAt: 0,
@@ -136,6 +148,7 @@ function makeBody(seed, asteroid = false) {
     vy,
     color,
     asteroid,
+    manual: false,
     trail: [],
     speedHistory: [],
   };
@@ -169,6 +182,7 @@ function resetSimulation() {
   state.selected = Math.min(1, state.bodies.length - 1);
   state.simTime = 0;
   state.camera.initialized = false;
+  state.manualBodyCount = 0;
   document.body.classList.remove("inspector-open");
   updateSceneCopy();
 }
@@ -293,6 +307,16 @@ function worldToScreen(x, y) {
   };
 }
 
+function screenToWorld(clientX, clientY) {
+  const rect = canvas.getBoundingClientRect();
+  const x = clientX - rect.left;
+  const y = clientY - rect.top;
+  return {
+    x: (x - canvas.clientWidth / 2) / state.camera.zoom + state.camera.x,
+    y: (y - canvas.clientHeight / 2) / state.camera.zoom + state.camera.y,
+  };
+}
+
 function hexToRgb(hex) {
   const value = hex.replace("#", "");
   return {
@@ -397,6 +421,41 @@ function drawBodies() {
       ctx.fillText(body.name, point.x + radius + 8, point.y - radius - 4);
     }
   }
+}
+
+function drawExperimentDraft() {
+  if (!state.experimentMode || !state.dragStartWorld || !state.dragCurrentWorld) return;
+  const start = worldToScreen(state.dragStartWorld.x, state.dragStartWorld.y);
+  const end = worldToScreen(state.dragCurrentWorld.x, state.dragCurrentWorld.y);
+  const dx = end.x - start.x;
+  const dy = end.y - start.y;
+  const distance = Math.hypot(dx, dy);
+  const radius = Math.max(5, 7 * state.camera.zoom);
+
+  ctx.save();
+  ctx.strokeStyle = "rgba(168, 140, 255, 0.9)";
+  ctx.fillStyle = "rgba(168, 140, 255, 0.92)";
+  ctx.lineWidth = 2;
+  ctx.setLineDash([7, 6]);
+  ctx.beginPath();
+  ctx.arc(start.x, start.y, radius + 4, 0, Math.PI * 2);
+  ctx.stroke();
+  ctx.setLineDash([]);
+
+  if (distance > 8) {
+    const angle = Math.atan2(dy, dx);
+    ctx.beginPath();
+    ctx.moveTo(start.x, start.y);
+    ctx.lineTo(end.x, end.y);
+    ctx.stroke();
+    ctx.beginPath();
+    ctx.moveTo(end.x, end.y);
+    ctx.lineTo(end.x - Math.cos(angle - 0.45) * 14, end.y - Math.sin(angle - 0.45) * 14);
+    ctx.lineTo(end.x - Math.cos(angle + 0.45) * 14, end.y - Math.sin(angle + 0.45) * 14);
+    ctx.closePath();
+    ctx.fill();
+  }
+  ctx.restore();
 }
 
 function renderSparkline(body) {
@@ -568,6 +627,7 @@ function updateShow(timestamp) {
 }
 
 function startShow(timestamp = performance.now()) {
+  setExperimentMode(false, true);
   state.showMode = true;
   state.showIndex = 0;
   state.showStartedAt = timestamp;
@@ -597,6 +657,26 @@ function toggleShow() {
   }
 }
 
+function setExperimentMode(enabled, silent = false) {
+  state.experimentMode = enabled;
+  state.draggingNewBody = false;
+  state.dragStartWorld = null;
+  state.dragCurrentWorld = null;
+  document.body.classList.toggle("experiment-mode", enabled);
+  if (enabled) {
+    if (state.showMode) stopShow();
+    setPresentationMode(false);
+    state.paused = false;
+    controls.cameraMode.value = "auto";
+    state.camera.initialized = false;
+    if (!silent) showToast("Кликните по сцене, чтобы добавить планету");
+  }
+}
+
+function toggleExperimentMode() {
+  setExperimentMode(!state.experimentMode);
+}
+
 async function copySiteLink() {
   try {
     await navigator.clipboard.writeText(siteUrl);
@@ -606,6 +686,24 @@ async function copySiteLink() {
   }
 }
 
+function canEditBody(body) {
+  return Boolean(body && !body.asteroid && state.selected !== 0);
+}
+
+function syncEditorControls(body) {
+  const editable = canEditBody(body);
+  const speed = body ? Math.hypot(body.vx, body.vy) : 0;
+  controls.massControl.disabled = !editable;
+  controls.speedControl.disabled = !editable;
+  controls.massControl.value = String(Math.min(Number(controls.massControl.max), Math.max(Number(controls.massControl.min), body?.mass || 1)));
+  controls.speedControl.value = String(Math.min(Number(controls.speedControl.max), Math.max(Number(controls.speedControl.min), speed)));
+  controls.massControlValue.value = body ? body.mass.toLocaleString("ru-RU", { maximumFractionDigits: 1 }) : "0";
+  controls.speedControlValue.value = speed.toFixed(1);
+  controls.editorHint.textContent = editable
+    ? "Чем больше масса и скорость, тем сильнее меняется траектория."
+    : "Для Солнца и астероидов редактирование отключено.";
+}
+
 function updateUi() {
   const body = state.bodies[state.selected] || state.bodies[0];
   controls.gravityValue.value = Number(state.gravity).toFixed(2);
@@ -613,6 +711,10 @@ function updateUi() {
   controls.pauseButton.textContent = state.paused ? "Старт" : "Пауза";
   controls.presentationButton.textContent = state.presentationMode ? "Обычный вид" : "Презентация";
   controls.showButton.textContent = state.showMode ? "Стоп" : "Шоу";
+  controls.experimentButton.textContent = state.experimentMode ? "Стоп эксп." : "Эксперимент";
+  controls.experimentHint.textContent = state.draggingNewBody
+    ? "Протяните и отпустите, чтобы задать начальную скорость"
+    : "Кликните по сцене, чтобы добавить планету";
   controls.bodyCount.textContent = `${state.bodies.length} тел`;
   controls.activePreset.textContent = presetLabels[controls.preset.value] || controls.preset.value;
   controls.simTime.textContent = `t=${state.simTime.toFixed(1)}`;
@@ -633,6 +735,7 @@ function updateUi() {
   controls.selectedSpeed.textContent = speed.toFixed(2);
   controls.selectedRadius.textContent = radius.toFixed(1);
   controls.selectedPosition.textContent = `${body.x.toFixed(0)}, ${body.y.toFixed(0)}`;
+  syncEditorControls(body);
   renderSparkline(body);
 }
 
@@ -642,6 +745,7 @@ function render() {
   drawGrid();
   drawTrails();
   drawBodies();
+  drawExperimentDraft();
   updateUi();
 }
 
@@ -656,6 +760,73 @@ function tick(timestamp) {
   }
   render();
   requestAnimationFrame(tick);
+}
+
+function velocityFromDrag(start, end) {
+  const dx = end.x - start.x;
+  const dy = end.y - start.y;
+  if (Math.hypot(dx, dy) > 18) {
+    return { vx: dx * 0.14, vy: dy * 0.14 };
+  }
+  const radius = Math.max(120, Math.hypot(start.x, start.y));
+  const speed = Math.sqrt((state.gravity * 332946) / radius) * 1.08;
+  return {
+    vx: (-start.y / radius) * speed,
+    vy: (start.x / radius) * speed,
+  };
+}
+
+function addManualPlanet(start, end) {
+  const velocity = velocityFromDrag(start, end);
+  state.manualBodyCount += 1;
+  const body = makeBody(
+    [
+      `Планета ${state.manualBodyCount}`,
+      1,
+      7,
+      start.x,
+      start.y,
+      velocity.vx,
+      velocity.vy,
+      state.manualBodyCount % 2 ? colors.violet : colors.teal,
+    ],
+    false,
+  );
+  body.manual = true;
+  state.bodies.push(body);
+  state.selected = state.bodies.length - 1;
+  document.body.classList.add("inspector-open");
+  showToast("Планета добавлена. Измените массу или скорость в инспекторе");
+}
+
+function handleExperimentPointerDown(event) {
+  if (!state.experimentMode) return false;
+  event.preventDefault();
+  canvas.setPointerCapture?.(event.pointerId);
+  const world = screenToWorld(event.clientX, event.clientY);
+  state.draggingNewBody = true;
+  state.dragStartWorld = world;
+  state.dragCurrentWorld = world;
+  return true;
+}
+
+function handleExperimentPointerMove(event) {
+  if (!state.experimentMode || !state.draggingNewBody) return false;
+  event.preventDefault();
+  state.dragCurrentWorld = screenToWorld(event.clientX, event.clientY);
+  return true;
+}
+
+function handleExperimentPointerUp(event) {
+  if (!state.experimentMode || !state.draggingNewBody) return false;
+  event.preventDefault();
+  canvas.releasePointerCapture?.(event.pointerId);
+  const end = screenToWorld(event.clientX, event.clientY);
+  addManualPlanet(state.dragStartWorld, end);
+  state.draggingNewBody = false;
+  state.dragStartWorld = null;
+  state.dragCurrentWorld = null;
+  return true;
 }
 
 function selectAt(clientX, clientY) {
@@ -677,6 +848,7 @@ function selectAt(clientX, clientY) {
 
 function setPreset(presetId) {
   if (!presetOrder.includes(presetId)) return;
+  setExperimentMode(false, true);
   controls.preset.value = presetId;
   resetSimulation();
 }
@@ -726,8 +898,36 @@ controls.musicButton.addEventListener("click", toggleMusic);
 controls.inspectorToggle.addEventListener("click", toggleInspector);
 controls.closeInspectorButton.addEventListener("click", () => document.body.classList.remove("inspector-open"));
 controls.showButton.addEventListener("click", toggleShow);
+controls.experimentButton.addEventListener("click", toggleExperimentMode);
 controls.copyLinkButton.addEventListener("click", copySiteLink);
-canvas.addEventListener("click", (event) => selectAt(event.clientX, event.clientY));
+controls.massControl.addEventListener("input", () => {
+  const body = state.bodies[state.selected];
+  if (!canEditBody(body)) return;
+  body.mass = Number(controls.massControl.value);
+  controls.massControlValue.value = body.mass.toLocaleString("ru-RU", { maximumFractionDigits: 1 });
+});
+controls.speedControl.addEventListener("input", () => {
+  const body = state.bodies[state.selected];
+  if (!canEditBody(body)) return;
+  const targetSpeed = Number(controls.speedControl.value);
+  const currentSpeed = Math.hypot(body.vx, body.vy);
+  if (currentSpeed > 0.001) {
+    const scale = targetSpeed / currentSpeed;
+    body.vx *= scale;
+    body.vy *= scale;
+  } else {
+    body.vx = targetSpeed;
+    body.vy = 0;
+  }
+  controls.speedControlValue.value = targetSpeed.toFixed(1);
+});
+canvas.addEventListener("pointerdown", handleExperimentPointerDown);
+canvas.addEventListener("pointermove", handleExperimentPointerMove);
+canvas.addEventListener("pointerup", handleExperimentPointerUp);
+canvas.addEventListener("pointercancel", handleExperimentPointerUp);
+canvas.addEventListener("click", (event) => {
+  if (!state.experimentMode) selectAt(event.clientX, event.clientY);
+});
 window.addEventListener("resize", () => {
   if (!window.matchMedia("(max-width: 900px)").matches) {
     document.body.classList.remove("inspector-open");
@@ -746,6 +946,7 @@ window.addEventListener("keydown", (event) => {
   if (event.key === "ArrowRight") shiftPreset(1);
   if (event.key === "Escape") {
     stopShow();
+    setExperimentMode(false, true);
     setPresentationMode(false);
     document.body.classList.remove("inspector-open");
   }
