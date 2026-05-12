@@ -209,10 +209,6 @@ body.experiment-mode #experimentButton {
   background: rgba(244, 199, 93, 0.16);
 }
 
-.wide-button {
-  margin-top: 10px;
-}
-
 .stage {
   position: relative;
   min-width: 0;
@@ -656,7 +652,7 @@ body.presentation-mode .top-hud {
   .preset-buttons,
   .button-row {
     gap: 8px;
-    grid-template-columns: 1fr;
+    grid-template-columns: 1fr 1fr;
   }
 
   .toggles {
@@ -676,10 +672,6 @@ body.presentation-mode .top-hud {
 
   .button-row,
   .utility-row {
-    margin-top: 0;
-  }
-
-  .wide-button {
     margin-top: 0;
   }
 
@@ -847,8 +839,7 @@ body.presentation-mode .top-hud {
   body.experiment-mode .brand,
   body.experiment-mode .left-panel .control-group,
   body.experiment-mode .secondary-row,
-  body.experiment-mode #showButton,
-  body.experiment-mode #copyLinkButton {
+  body.experiment-mode #showButton {
     display: none;
   }
 
@@ -969,12 +960,6 @@ body.presentation-mode .top-hud {
   .control-group label,
   .row-label {
     font-size: 12px;
-  }
-
-  .preset-buttons,
-  .button-row,
-  .utility-row {
-    grid-template-columns: 1fr;
   }
 
   .right-panel {

@@ -26,7 +26,6 @@ const controls = {
   closeInspectorButton: document.getElementById("closeInspectorButton"),
   showButton: document.getElementById("showButton"),
   experimentButton: document.getElementById("experimentButton"),
-  copyLinkButton: document.getElementById("copyLinkButton"),
   bodyCount: document.getElementById("bodyCount"),
   activePreset: document.getElementById("activePreset"),
   simTime: document.getElementById("simTime"),
@@ -67,7 +66,6 @@ const colors = {
 
 const presetOrder = ["three-orbits", "single-orbit", "chaos", "binary-giants", "asteroid-belt"];
 const showOrder = ["three-orbits", "chaos", "binary-giants", "asteroid-belt"];
-const siteUrl = "https://igorryltsin-design.github.io/GravityLab/";
 const presetLabels = {
   "three-orbits": "Три орбиты",
   "single-orbit": "Одна планета",
@@ -677,15 +675,6 @@ function toggleExperimentMode() {
   setExperimentMode(!state.experimentMode);
 }
 
-async function copySiteLink() {
-  try {
-    await navigator.clipboard.writeText(siteUrl);
-    showToast("Ссылка скопирована");
-  } catch {
-    showToast(`Ссылка: ${siteUrl}`);
-  }
-}
-
 function canEditBody(body) {
   return Boolean(body && !body.asteroid && state.selected !== 0);
 }
@@ -911,7 +900,6 @@ controls.inspectorToggle.addEventListener("click", toggleInspector);
 controls.closeInspectorButton.addEventListener("click", () => document.body.classList.remove("inspector-open"));
 controls.showButton.addEventListener("click", toggleShow);
 controls.experimentButton.addEventListener("click", toggleExperimentMode);
-controls.copyLinkButton.addEventListener("click", copySiteLink);
 controls.massControl.addEventListener("input", () => {
   const body = state.bodies[state.selected];
   if (!canEditBody(body)) return;
