@@ -241,7 +241,8 @@ function lerp(current, target, amount) {
 
 function cameraTargetForMode() {
   if (!state.bodies.length) return;
-  const mode = state.showMode ? "auto" : controls.cameraMode.value;
+  const experimentFocus = state.experimentMode;
+  const mode = state.showMode ? "auto" : experimentFocus ? "selected" : controls.cameraMode.value;
   const focusBody =
     mode === "selected"
       ? state.bodies[state.selected]
@@ -258,7 +259,9 @@ function cameraTargetForMode() {
 
   const nonAsteroids = state.bodies.filter((body) => !body.asteroid);
   let maxRadius = 240;
-  if (mode === "auto") {
+  if (experimentFocus && focusBody) {
+    maxRadius = 260;
+  } else if (mode === "auto") {
     for (const body of nonAsteroids) {
       maxRadius = Math.max(maxRadius, Math.hypot(body.x, body.y) + 120);
     }
@@ -660,7 +663,7 @@ function setExperimentMode(enabled, silent = false) {
     if (state.showMode) stopShow();
     setPresentationMode(false);
     state.paused = false;
-    controls.cameraMode.value = "auto";
+    controls.cameraMode.value = "selected";
     state.camera.initialized = false;
     if (!silent) showToast("Кликните по пустому месту, чтобы добавить планету");
   }
@@ -779,6 +782,7 @@ function addManualPlanet(start, end) {
   body.manual = true;
   state.bodies.push(body);
   state.selected = state.bodies.length - 1;
+  state.camera.initialized = false;
   document.body.classList.add("inspector-open");
   showToast("Планета добавлена. Измените массу или скорость в инспекторе");
 }
@@ -789,6 +793,7 @@ function handleExperimentPointerDown(event) {
   const existingBodyIndex = bodyIndexAt(event.clientX, event.clientY);
   if (existingBodyIndex >= 0) {
     state.selected = existingBodyIndex;
+    state.camera.initialized = false;
     document.body.classList.add("inspector-open");
     showToast(canEditBody(state.bodies[existingBodyIndex]) ? "Планета выбрана. Меняйте массу и скорость в инспекторе" : "Это тело можно смотреть, но нельзя редактировать");
     return true;
