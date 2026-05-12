@@ -669,7 +669,7 @@ function setExperimentMode(enabled, silent = false) {
     state.paused = false;
     controls.cameraMode.value = "auto";
     state.camera.initialized = false;
-    if (!silent) showToast("Кликните по сцене, чтобы добавить планету");
+    if (!silent) showToast("Кликните по пустому месту, чтобы добавить планету");
   }
 }
 
@@ -714,7 +714,7 @@ function updateUi() {
   controls.experimentButton.textContent = state.experimentMode ? "Стоп эксп." : "Эксперимент";
   controls.experimentHint.textContent = state.draggingNewBody
     ? "Протяните и отпустите, чтобы задать начальную скорость"
-    : "Кликните по сцене, чтобы добавить планету";
+    : "Кликните по пустому месту, чтобы добавить планету";
   controls.bodyCount.textContent = `${state.bodies.length} тел`;
   controls.activePreset.textContent = presetLabels[controls.preset.value] || controls.preset.value;
   controls.simTime.textContent = `t=${state.simTime.toFixed(1)}`;
@@ -802,6 +802,13 @@ function addManualPlanet(start, end) {
 function handleExperimentPointerDown(event) {
   if (!state.experimentMode) return false;
   event.preventDefault();
+  const existingBodyIndex = bodyIndexAt(event.clientX, event.clientY);
+  if (existingBodyIndex >= 0) {
+    state.selected = existingBodyIndex;
+    document.body.classList.add("inspector-open");
+    showToast(canEditBody(state.bodies[existingBodyIndex]) ? "Планета выбрана. Меняйте массу и скорость в инспекторе" : "Это тело можно смотреть, но нельзя редактировать");
+    return true;
+  }
   canvas.setPointerCapture?.(event.pointerId);
   const world = screenToWorld(event.clientX, event.clientY);
   state.draggingNewBody = true;
@@ -829,7 +836,7 @@ function handleExperimentPointerUp(event) {
   return true;
 }
 
-function selectAt(clientX, clientY) {
+function bodyIndexAt(clientX, clientY) {
   const rect = canvas.getBoundingClientRect();
   const x = clientX - rect.left;
   const y = clientY - rect.top;
@@ -843,6 +850,11 @@ function selectAt(clientX, clientY) {
       bestDistance = distance;
     }
   });
+  return best;
+}
+
+function selectAt(clientX, clientY) {
+  const best = bodyIndexAt(clientX, clientY);
   if (best >= 0) state.selected = best;
 }
 
