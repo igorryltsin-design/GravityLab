@@ -189,7 +189,7 @@ input[type="range"] {
   margin-top: 10px;
 }
 
-#presentationButton {
+#helpButton {
   border-color: rgba(244, 199, 93, 0.55);
   background: rgba(244, 199, 93, 0.14);
 }
@@ -540,6 +540,95 @@ body.experiment-mode .experiment-hint {
   line-height: 1.35;
 }
 
+.help-overlay {
+  position: fixed;
+  inset: 0;
+  z-index: 20;
+  display: none;
+  padding: 28px;
+  overflow-y: auto;
+  background:
+    radial-gradient(circle at 50% 18%, rgba(86, 214, 194, 0.16), transparent 34%),
+    rgba(5, 7, 12, 0.94);
+}
+
+body.help-mode {
+  overflow: hidden;
+}
+
+body.help-mode .help-overlay {
+  display: grid;
+  place-items: center;
+}
+
+.help-panel {
+  width: min(980px, 100%);
+  padding: 28px;
+  border: 1px solid rgba(143, 169, 209, 0.22);
+  border-radius: 8px;
+  background: rgba(10, 14, 22, 0.9);
+  box-shadow: 0 28px 90px rgba(0, 0, 0, 0.48);
+}
+
+.help-head {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 18px;
+  margin-bottom: 24px;
+}
+
+.help-head span {
+  color: var(--accent);
+  font-size: 13px;
+  font-weight: 800;
+  text-transform: uppercase;
+}
+
+.help-head h2 {
+  margin: 5px 0 0;
+  font-size: clamp(28px, 5vw, 52px);
+  line-height: 1;
+}
+
+#closeHelpButton {
+  width: auto;
+  min-width: 92px;
+  padding: 0 14px;
+}
+
+.help-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 14px;
+}
+
+.help-grid article {
+  min-height: 150px;
+  padding: 18px;
+  border: 1px solid rgba(143, 169, 209, 0.16);
+  border-radius: 8px;
+  background: rgba(255, 255, 255, 0.045);
+}
+
+.help-grid h3 {
+  margin: 0 0 10px;
+  font-size: 18px;
+}
+
+.help-grid p {
+  color: rgba(238, 244, 255, 0.76);
+  font-size: 15px;
+  line-height: 1.45;
+}
+
+.help-credit {
+  margin-top: 18px;
+  color: var(--muted);
+  text-align: right;
+  font-size: 13px;
+}
+
 body.presentation-mode .left-panel,
 body.presentation-mode .right-panel,
 body.presentation-mode .bottom-hud {
@@ -819,6 +908,45 @@ body.presentation-mode .top-hud {
 
   .scene-card p {
     font-size: 12px;
+  }
+
+  .help-overlay {
+    padding: 14px;
+  }
+
+  .help-panel {
+    padding: 18px;
+  }
+
+  .help-head {
+    align-items: center;
+    margin-bottom: 16px;
+  }
+
+  .help-head h2 {
+    font-size: 28px;
+  }
+
+  .help-grid {
+    grid-template-columns: 1fr;
+    gap: 10px;
+  }
+
+  .help-grid article {
+    min-height: 0;
+    padding: 14px;
+  }
+
+  .help-grid h3 {
+    font-size: 16px;
+  }
+
+  .help-grid p {
+    font-size: 13px;
+  }
+
+  .help-credit {
+    text-align: left;
   }
 
   .experiment-hint {

@@ -69,7 +69,7 @@
         </section>
 
         <div class="button-row utility-row secondary-row">
-          <button id="presentationButton" type="button">Презентация</button>
+          <button id="helpButton" type="button">Справка</button>
           <button id="inspectorToggle" type="button">Инспектор</button>
         </div>
 
@@ -113,6 +113,37 @@
         <div id="toast" class="toast" role="status" aria-live="polite"></div>
       </section>
 
+      <section id="helpOverlay" class="help-overlay" aria-label="Справка о программе" aria-hidden="true">
+        <div class="help-panel">
+          <div class="help-head">
+            <div>
+              <span>GravityLab</span>
+              <h2>Справка о программе</h2>
+            </div>
+            <button id="closeHelpButton" type="button">Закрыть</button>
+          </div>
+          <div class="help-grid">
+            <article>
+              <h3>Что показывает</h3>
+              <p>Симуляция демонстрирует движение тел под действием гравитации: стабильные орбиты, хаос, двойные центры и пояс астероидов.</p>
+            </article>
+            <article>
+              <h3>Шоу</h3>
+              <p>Автоматически переключает сцены и подходит для быстрого показа классу.</p>
+            </article>
+            <article>
+              <h3>Эксперимент</h3>
+              <p>Кликните по пустому месту, чтобы добавить планету. Протяните палец или мышь, чтобы задать начальную скорость.</p>
+            </article>
+            <article>
+              <h3>Инспектор</h3>
+              <p>Выберите планету и измените массу или скорость. Чем больше значения, тем заметнее меняется траектория.</p>
+            </article>
+          </div>
+          <p class="help-credit">Рыльцин Тимур 10А МОУ СОШ № 22</p>
+        </div>
+      </section>
+
       <aside class="panel right-panel" aria-label="Инспектор">
         <div class="inspector-head">
           <h2>Инспектор</h2>
@@ -148,6 +179,6 @@
       </aside>
     </main>
 
-    <script src="./app.js?v=default-sun-focus"></script>
+    <script src="./app.js?v=fullscreen-help"></script>
   </body>
 </html>

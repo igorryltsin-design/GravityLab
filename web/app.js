@@ -19,7 +19,8 @@ const controls = {
   labels: document.getElementById("toggleLabels"),
   pauseButton: document.getElementById("pauseButton"),
   resetButton: document.getElementById("resetButton"),
-  presentationButton: document.getElementById("presentationButton"),
+  helpButton: document.getElementById("helpButton"),
+  closeHelpButton: document.getElementById("closeHelpButton"),
   exitPresentationButton: document.getElementById("exitPresentationButton"),
   musicButton: document.getElementById("musicButton"),
   inspectorToggle: document.getElementById("inspectorToggle"),
@@ -696,7 +697,6 @@ function updateUi() {
   controls.gravityValue.value = Number(state.gravity).toFixed(2);
   controls.timeScaleValue.value = `${Number(state.timeScale).toFixed(1)}x`;
   controls.pauseButton.textContent = state.paused ? "Старт" : "Пауза";
-  controls.presentationButton.textContent = state.presentationMode ? "Обычный вид" : "Презентация";
   controls.showButton.textContent = state.showMode ? "Стоп" : "Шоу";
   controls.experimentButton.textContent = state.experimentMode ? "Стоп эксп." : "Эксперимент";
   controls.experimentHint.textContent = state.draggingNewBody
@@ -884,6 +884,11 @@ function toggleInspector() {
   }
 }
 
+function setHelpMode(enabled) {
+  document.body.classList.toggle("help-mode", enabled);
+  document.getElementById("helpOverlay").setAttribute("aria-hidden", enabled ? "false" : "true");
+}
+
 controls.preset.addEventListener("change", () => setPreset(controls.preset.value));
 controls.prevPresetButton.addEventListener("click", () => shiftPreset(-1));
 controls.nextPresetButton.addEventListener("click", () => shiftPreset(1));
@@ -900,7 +905,8 @@ controls.pauseButton.addEventListener("click", () => {
   state.paused = !state.paused;
 });
 controls.resetButton.addEventListener("click", resetSimulation);
-controls.presentationButton.addEventListener("click", () => setPresentationMode(!state.presentationMode));
+controls.helpButton.addEventListener("click", () => setHelpMode(true));
+controls.closeHelpButton.addEventListener("click", () => setHelpMode(false));
 controls.exitPresentationButton.addEventListener("click", () => setPresentationMode(false));
 controls.musicButton.addEventListener("click", toggleMusic);
 controls.inspectorToggle.addEventListener("click", toggleInspector);
@@ -947,11 +953,12 @@ window.addEventListener("keydown", (event) => {
     state.paused = !state.paused;
   }
   if (event.key.toLowerCase() === "r") resetSimulation();
-  if (event.key.toLowerCase() === "p") setPresentationMode(!state.presentationMode);
+  if (event.key.toLowerCase() === "p") setHelpMode(!document.body.classList.contains("help-mode"));
   if (event.key.toLowerCase() === "s") toggleShow();
   if (event.key === "ArrowLeft") shiftPreset(-1);
   if (event.key === "ArrowRight") shiftPreset(1);
   if (event.key === "Escape") {
+    setHelpMode(false);
     stopShow();
     setExperimentMode(false, true);
     setPresentationMode(false);
