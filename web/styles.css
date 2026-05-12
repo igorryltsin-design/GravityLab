@@ -701,7 +701,7 @@ body.help-mode .help-overlay {
   line-height: 1.45;
 }
 
-.defense-card {
+.study-help-card {
   grid-column: 1 / -1;
   min-height: 0;
 }
