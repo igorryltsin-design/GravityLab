@@ -4,7 +4,7 @@
     <meta charset="utf-8">
     <meta name="viewport" content="width=device-width, initial-scale=1">
     <title>GravityLab Web</title>
-    <link rel="stylesheet" href="./styles.css?v=solar-system-logo">
+    <link rel="stylesheet" href="./styles.css?v=study-upgrade-2">
   </head>
   <body>
     <main class="app-shell">
@@ -76,6 +76,7 @@
         <div class="button-row utility-row mode-row">
           <button id="showButton" type="button">Шоу</button>
           <button id="experimentButton" type="button">Эксперимент</button>
+          <button id="cameraCycleButton" class="camera-cycle-button" type="button">Камера: Авто</button>
         </div>
       </aside>
 
@@ -97,6 +98,14 @@
         <div id="experimentHint" class="experiment-hint" aria-live="polite">
           Кликните по пустому месту, чтобы добавить планету
         </div>
+        <section id="studyCard" class="study-card" aria-live="polite">
+          <div>
+            <span>Задание</span>
+            <strong id="studyTitle">Создай орбиту</strong>
+          </div>
+          <p id="studyText">Добавьте планету и попробуйте получить плавную траекторию вокруг Солнца.</p>
+          <button id="nextTaskButton" type="button">След.</button>
+        </section>
         <div class="hud top-hud">
           <span id="bodyCount">0 тел</span>
           <span id="activePreset">Три орбиты</span>
@@ -139,6 +148,10 @@
               <h3>Инспектор</h3>
               <p>Выберите планету и измените массу или скорость. Чем больше значения, тем заметнее меняется траектория.</p>
             </article>
+            <article class="defense-card">
+              <h3>Что сказать на защите</h3>
+              <p>Гравитация притягивает тела. Большая масса сильнее меняет движение. Скорость определяет форму орбиты.</p>
+            </article>
           </div>
           <p class="help-credit">Рыльцин Тимур 10А МОУ СОШ № 22</p>
         </div>
@@ -179,6 +192,6 @@
       </aside>
     </main>
 
-    <script src="./app.js?v=auto-camera-help"></script>
+    <script src="./app.js?v=study-upgrade-2"></script>
   </body>
 </html>

@@ -27,6 +27,8 @@ const controls = {
   closeInspectorButton: document.getElementById("closeInspectorButton"),
   showButton: document.getElementById("showButton"),
   experimentButton: document.getElementById("experimentButton"),
+  cameraCycleButton: document.getElementById("cameraCycleButton"),
+  nextTaskButton: document.getElementById("nextTaskButton"),
   bodyCount: document.getElementById("bodyCount"),
   activePreset: document.getElementById("activePreset"),
   simTime: document.getElementById("simTime"),
@@ -37,6 +39,8 @@ const controls = {
   sceneTransition: document.getElementById("sceneTransition"),
   transitionTitle: document.getElementById("transitionTitle"),
   experimentHint: document.getElementById("experimentHint"),
+  studyTitle: document.getElementById("studyTitle"),
+  studyText: document.getElementById("studyText"),
   toast: document.getElementById("toast"),
   selectedColor: document.getElementById("selectedColor"),
   selectedName: document.getElementById("selectedName"),
@@ -81,6 +85,20 @@ const presetDescriptions = {
   "binary-giants": "Два массивных тела создают сложное поле притяжения.",
   "asteroid-belt": "Множество малых тел движутся под влиянием планет.",
 };
+const studyTasks = [
+  {
+    title: "Создай орбиту",
+    text: "Добавьте планету и попробуйте получить плавную траекторию вокруг Солнца.",
+  },
+  {
+    title: "Увеличь массу",
+    text: "Выберите планету и поднимите массу: траектория соседних тел изменится заметнее.",
+  },
+  {
+    title: "Сравни скорость",
+    text: "Измените скорость выбранной планеты и сравните, стала орбита шире или уже.",
+  },
+];
 
 const presets = {
   "single-orbit": [
@@ -122,6 +140,7 @@ const state = {
   dragStartWorld: null,
   dragCurrentWorld: null,
   manualBodyCount: 0,
+  studyTaskIndex: 0,
   showIndex: 0,
   showStartedAt: 0,
   showSceneStartedAt: 0,
@@ -428,6 +447,8 @@ function drawExperimentDraft() {
   const dy = end.y - start.y;
   const distance = Math.hypot(dx, dy);
   const radius = Math.max(5, 7 * state.camera.zoom);
+  const draftVelocity = velocityFromDrag(state.dragStartWorld, state.dragCurrentWorld);
+  const draftSpeed = Math.hypot(draftVelocity.vx, draftVelocity.vy);
 
   ctx.save();
   ctx.strokeStyle = "rgba(168, 140, 255, 0.9)";
@@ -451,6 +472,9 @@ function drawExperimentDraft() {
     ctx.lineTo(end.x - Math.cos(angle + 0.45) * 14, end.y - Math.sin(angle + 0.45) * 14);
     ctx.closePath();
     ctx.fill();
+    ctx.fillStyle = "rgba(238, 244, 255, 0.92)";
+    ctx.font = "700 12px system-ui, sans-serif";
+    ctx.fillText(`v=${draftSpeed.toFixed(0)}`, end.x + 10, end.y - 10);
   }
   ctx.restore();
 }
@@ -674,6 +698,35 @@ function toggleExperimentMode() {
   setExperimentMode(!state.experimentMode);
 }
 
+function updateStudyTask() {
+  const task = studyTasks[state.studyTaskIndex];
+  controls.studyTitle.textContent = task.title;
+  controls.studyText.textContent = task.text;
+}
+
+function shiftStudyTask() {
+  state.studyTaskIndex = (state.studyTaskIndex + 1) % studyTasks.length;
+  updateStudyTask();
+}
+
+function cameraModeLabel(mode) {
+  if (mode === "sun") return "Солнце";
+  if (mode === "selected") return "Планета";
+  return "Авто";
+}
+
+function updateCameraCycleButton() {
+  controls.cameraCycleButton.textContent = `Камера: ${cameraModeLabel(controls.cameraMode.value)}`;
+}
+
+function cycleCameraMode() {
+  const modes = ["auto", "sun", "selected"];
+  const currentIndex = Math.max(0, modes.indexOf(controls.cameraMode.value));
+  controls.cameraMode.value = modes[(currentIndex + 1) % modes.length];
+  state.camera.initialized = false;
+  updateCameraCycleButton();
+}
+
 function canEditBody(body) {
   return Boolean(body && !body.asteroid && state.selected !== 0);
 }
@@ -699,6 +752,7 @@ function updateUi() {
   controls.pauseButton.textContent = state.paused ? "Старт" : "Пауза";
   controls.showButton.textContent = state.showMode ? "Стоп" : "Шоу";
   controls.experimentButton.textContent = state.experimentMode ? "Стоп эксп." : "Эксперимент";
+  updateCameraCycleButton();
   controls.experimentHint.textContent = state.draggingNewBody
     ? "Протяните и отпустите, чтобы задать начальную скорость"
     : "Кликните по пустому месту, чтобы добавить планету";
@@ -790,8 +844,14 @@ function addManualPlanet(start, end) {
   state.bodies.push(body);
   state.selected = state.bodies.length - 1;
   state.camera.initialized = false;
+  state.paused = true;
   document.body.classList.add("inspector-open");
   showToast("Планета добавлена. Измените массу или скорость в инспекторе");
+  window.setTimeout(() => {
+    if (state.experimentMode && state.bodies.includes(body) && state.paused) {
+      state.paused = false;
+    }
+  }, 1200);
 }
 
 function handleExperimentPointerDown(event) {
@@ -894,6 +954,7 @@ controls.prevPresetButton.addEventListener("click", () => shiftPreset(-1));
 controls.nextPresetButton.addEventListener("click", () => shiftPreset(1));
 controls.cameraMode.addEventListener("change", () => {
   state.camera.initialized = false;
+  updateCameraCycleButton();
 });
 controls.gravity.addEventListener("input", () => {
   state.gravity = Number(controls.gravity.value);
@@ -913,6 +974,8 @@ controls.inspectorToggle.addEventListener("click", toggleInspector);
 controls.closeInspectorButton.addEventListener("click", () => document.body.classList.remove("inspector-open"));
 controls.showButton.addEventListener("click", toggleShow);
 controls.experimentButton.addEventListener("click", toggleExperimentMode);
+controls.cameraCycleButton.addEventListener("click", cycleCameraMode);
+controls.nextTaskButton.addEventListener("click", shiftStudyTask);
 controls.massControl.addEventListener("input", () => {
   const body = state.bodies[state.selected];
   if (!canEditBody(body)) return;
@@ -968,5 +1031,7 @@ window.addEventListener("keydown", (event) => {
 
 resizeCanvas();
 resetSimulation();
+updateStudyTask();
+updateCameraCycleButton();
 startShow();
 requestAnimationFrame(tick);
