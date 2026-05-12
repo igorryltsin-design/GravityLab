@@ -72,13 +72,36 @@ select {
 }
 
 .brand-mark {
+  position: relative;
   width: 34px;
   height: 34px;
   border-radius: 50%;
   background:
-    radial-gradient(circle at 50% 50%, #fff 0 8%, #f4c75d 9% 28%, transparent 29%),
-    conic-gradient(from 30deg, transparent, rgba(86, 214, 194, 0.95), transparent 45%);
-  box-shadow: 0 0 24px rgba(244, 199, 93, 0.45);
+    radial-gradient(circle at 50% 50%, #fff7c2 0 6%, #ffd36a 7% 14%, transparent 15%),
+    radial-gradient(circle at 77% 50%, #5ab3ff 0 4%, transparent 5%),
+    radial-gradient(circle at 23% 50%, #ff735f 0 3.5%, transparent 4.5%),
+    radial-gradient(circle at 50% 18%, #56d6c2 0 3%, transparent 4%),
+    radial-gradient(circle at 50% 82%, #a88cff 0 3%, transparent 4%),
+    radial-gradient(circle at 50% 50%, transparent 0 34%, rgba(143, 169, 209, 0.56) 35% 37%, transparent 38%),
+    radial-gradient(circle at 50% 50%, transparent 0 48%, rgba(143, 169, 209, 0.34) 49% 51%, transparent 52%),
+    #070a10;
+  box-shadow: 0 0 18px rgba(244, 199, 93, 0.28), inset 0 0 18px rgba(86, 214, 194, 0.12);
+}
+
+.brand-mark::before,
+.brand-mark::after {
+  position: absolute;
+  inset: 4px;
+  content: "";
+  border: 1px solid rgba(143, 169, 209, 0.35);
+  border-radius: 50%;
+  transform: rotate(-22deg) scaleX(1.22);
+}
+
+.brand-mark::after {
+  inset: 9px;
+  border-color: rgba(244, 199, 93, 0.32);
+  transform: rotate(26deg) scaleX(1.35);
 }
 
 h1,
@@ -718,8 +741,8 @@ body.presentation-mode .top-hud {
   }
 
   .brand-mark {
-    width: 30px;
-    height: 30px;
+    width: 36px;
+    height: 36px;
   }
 
   h1 {
