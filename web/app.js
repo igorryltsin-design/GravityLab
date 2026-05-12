@@ -241,8 +241,8 @@ function lerp(current, target, amount) {
 
 function cameraTargetForMode() {
   if (!state.bodies.length) return;
-  const experimentFocus = state.experimentMode;
-  const mode = state.showMode ? "auto" : experimentFocus ? "selected" : controls.cameraMode.value;
+  const mode = controls.cameraMode.value;
+  const selectedExperimentFocus = state.experimentMode && mode === "selected";
   const focusBody =
     mode === "selected"
       ? state.bodies[state.selected]
@@ -259,7 +259,7 @@ function cameraTargetForMode() {
 
   const nonAsteroids = state.bodies.filter((body) => !body.asteroid);
   let maxRadius = 240;
-  if (experimentFocus && focusBody) {
+  if (selectedExperimentFocus && focusBody) {
     maxRadius = 260;
   } else if (mode === "auto") {
     for (const body of nonAsteroids) {
@@ -631,7 +631,7 @@ function startShow(timestamp = performance.now()) {
   state.paused = false;
   controls.timeScale.value = "0.7";
   state.timeScale = 0.7;
-  controls.cameraMode.value = "auto";
+  controls.cameraMode.value = "sun";
   setPresentationMode(true);
   setPreset(showOrder[state.showIndex]);
   flashTransition(showOrder[state.showIndex], timestamp);
@@ -663,7 +663,7 @@ function setExperimentMode(enabled, silent = false) {
     if (state.showMode) stopShow();
     setPresentationMode(false);
     state.paused = false;
-    controls.cameraMode.value = "selected";
+    controls.cameraMode.value = "sun";
     state.camera.initialized = false;
     if (!silent) showToast("Кликните по пустому месту, чтобы добавить планету");
   }
